@@ -1,0 +1,15 @@
+# 项目编译的二进制文件
+/super-agent
+
+# 环境变量配置（包含敏感信息）
+.env
+
+# Go 测试和编译中间产物
+*.test
+*.out
+
+# IDE 目录
+.vscode/
+
+# coding agent 的配置
+.agents
