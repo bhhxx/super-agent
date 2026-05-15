@@ -46,7 +46,7 @@ func (m *OpenAIModel) Next(ctx context.Context, messages []runtime.Message, tool
 	}
 	stream := m.client.Chat.Completions.NewStreaming(ctx, params)
 	acc := openai.ChatCompletionAccumulator{}
-	
+
 	var reasoningBuilder strings.Builder
 	for stream.Next() {
 		chunk := stream.Current()
@@ -56,7 +56,7 @@ func (m *OpenAIModel) Next(ctx context.Context, messages []runtime.Message, tool
 			deltaRaw := chunk.Choices[0].Delta
 			var delta messageWithReasoning
 			_ = json.Unmarshal([]byte(deltaRaw.RawJSON()), &delta)
-			
+
 			rc := delta.ReasoningContent
 			if rc == "" {
 				rc = delta.Reasoning
@@ -85,7 +85,7 @@ func (m *OpenAIModel) Next(ctx context.Context, messages []runtime.Message, tool
 	}
 
 	message := acc.Choices[0].Message
-	
+
 	finalRC := reasoningBuilder.String()
 	if finalRC == "" {
 		finalRC = reasoningText(message.RawJSON())

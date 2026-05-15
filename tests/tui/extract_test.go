@@ -3,7 +3,7 @@ package tui_test
 import (
 	"reflect"
 	"testing"
-	
+
 	"super-agent/tui"
 )
 
