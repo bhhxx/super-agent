@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"os"
 
+	"super-agent/runtime"
+
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
-	"super-agent/runtime"
 )
 
 type ClaudeModel struct {
@@ -64,7 +65,7 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 
 	for stream.Next() {
 		event := stream.Current()
-		
+
 		switch event.Type {
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
@@ -122,9 +123,10 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 func toClaudeMessages(messages []runtime.Message) []anthropic.MessageParam {
 	var result []anthropic.MessageParam
 	for _, msg := range messages {
-		if msg.Role == runtime.RoleUser {
+		switch msg.Role {
+		case runtime.RoleUser:
 			result = append(result, anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)))
-		} else if msg.Role == runtime.RoleAssistant {
+		case runtime.RoleAssistant:
 			var blocks []anthropic.ContentBlockParamUnion
 			if msg.Content != "" {
 				blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
@@ -144,7 +146,7 @@ func toClaudeMessages(messages []runtime.Message) []anthropic.MessageParam {
 					Content: blocks,
 				})
 			}
-		} else if msg.Role == runtime.RoleTool {
+		case runtime.RoleTool:
 			result = append(result, anthropic.MessageParam{
 				Role: anthropic.MessageParamRole("user"),
 				Content: []anthropic.ContentBlockParamUnion{

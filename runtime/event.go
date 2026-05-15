@@ -1,4 +1,5 @@
 package runtime
+
 // this file lists all event, which must have isEvent() method
 type Event interface {
 	isEvent()
