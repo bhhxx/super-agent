@@ -159,6 +159,26 @@ func TestMultipleToolCallsFeedAllResultsBackToModel(t *testing.T) {
 	}
 }
 
+func TestToolCallAssistantContentIsPreserved(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{
+			FinalAnswer: "I will inspect the files.",
+			ToolCalls:   []ToolCall{{ID: "call-1", Name: "bash", Input: "ls"}},
+		},
+		{FinalAnswer: "done"},
+	}}
+	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
+	engine := NewEngine(model, tools, nil)
+	engine.Ready()
+
+	runSession(t, engine, "use bash")
+
+	messages := engine.Messages()
+	if got := messages[1]; got.Role != RoleAssistant || got.Content != "I will inspect the files." {
+		t.Fatalf("assistant tool-call message = %+v", got)
+	}
+}
+
 func TestRiskyToolWaitsForShortcutApproval(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
 		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /", Risky: true}}},
@@ -437,5 +457,44 @@ func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 	}
 	if len(tools.calls) != 1 {
 		t.Fatalf("tool calls = %+v, want one", tools.calls)
+	}
+}
+
+func TestApproveAlwaysIsScopedToInput(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "ls", Risky: true}}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "ls", Risky: true}}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /", Risky: true}}},
+		{FinalAnswer: "done"},
+	}}
+	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
+	engine := NewEngine(model, tools, nil)
+	engine.Ready()
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ConfirmationAction, 1)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Run(context.Background(), "run bash", events, approvals)
+	}()
+
+	approvalCount := 0
+	for ev := range events {
+		if _, ok := ev.(ToolApprovalRequested); ok {
+			approvalCount++
+			if approvalCount == 1 {
+				approvals <- ConfirmAlways
+			} else {
+				approvals <- ConfirmOnce
+			}
+		}
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if approvalCount != 2 {
+		t.Fatalf("approval count = %d, want 2 (one for 'ls', one for 'rm')", approvalCount)
 	}
 }

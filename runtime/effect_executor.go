@@ -39,6 +39,7 @@ func (x *DefaultEffectExecutor) Execute(ctx context.Context, effect Effect, env 
 		calls := responseToolCalls(resp)
 		if len(calls) > 0 {
 			return ToolCallsRequested{
+				FinalAnswer:      resp.FinalAnswer,
 				Calls:            calls,
 				ReasoningContent: resp.ReasoningContent,
 				NeedsApproval:    env.NeedsApproval != nil && env.NeedsApproval(calls[0]),

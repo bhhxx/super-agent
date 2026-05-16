@@ -106,6 +106,7 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 
 	if len(toolCalls) > 0 {
 		return runtime.ModelResponse{
+			FinalAnswer:      finalAnswer,
 			ReasoningContent: reasoningContent,
 			ToolCalls:        toolCalls,
 		}, nil

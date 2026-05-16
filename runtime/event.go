@@ -18,6 +18,7 @@ type AssistantMessageReceived struct {
 func (AssistantMessageReceived) isEvent() {}
 
 type ToolCallsRequested struct {
+	FinalAnswer      string
 	Calls            []ToolCall
 	ReasoningContent string
 	NeedsApproval    bool

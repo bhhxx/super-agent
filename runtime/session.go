@@ -64,8 +64,9 @@ func NewSession(engine *Engine) *Session {
 func (s *Session) Run(ctx context.Context, query string, events chan<- SessionEvent, approvals <-chan ConfirmationAction) error {
 	defer close(events)
 	emittedMessages := 0
-	err := s.drainRun(ctx, events, approvals, query, &emittedMessages)
-	s.emitSnapshot(events, &emittedMessages)
+	var emittedApproval *ToolCall
+	err := s.drainRun(ctx, events, approvals, query, &emittedMessages, &emittedApproval)
+	s.emitSnapshot(events, &emittedMessages, &emittedApproval)
 	return err
 }
 
@@ -81,11 +82,19 @@ func (s *Session) Snapshot() Snapshot {
 	return s.engine.snapshot()
 }
 
-func (s *Session) emitSnapshot(events chan<- SessionEvent, emittedMessages *int) {
+func (s *Session) emitSnapshot(events chan<- SessionEvent, emittedMessages *int, emittedApproval **ToolCall) {
 	snapshot := s.Snapshot()
 	events <- StateChanged{State: snapshot.State}
 	if snapshot.PendingTool != nil {
-		events <- ToolApprovalRequested{ToolCall: *snapshot.PendingTool}
+		if emittedApproval == nil || *emittedApproval == nil || **emittedApproval != *snapshot.PendingTool {
+			events <- ToolApprovalRequested{ToolCall: *snapshot.PendingTool}
+			if emittedApproval != nil {
+				call := *snapshot.PendingTool
+				*emittedApproval = &call
+			}
+		}
+	} else if emittedApproval != nil {
+		*emittedApproval = nil
 	}
 	messages := snapshot.Messages
 	if emittedMessages == nil {
@@ -100,21 +109,21 @@ func (s *Session) emitSnapshot(events chan<- SessionEvent, emittedMessages *int)
 	*emittedMessages = len(messages)
 }
 
-func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, approvals <-chan ConfirmationAction, query string, emittedMessages *int) error {
+func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, approvals <-chan ConfirmationAction, query string, emittedMessages *int, emittedApproval **ToolCall) error {
 	chunkFunc := func(chunk StreamChunk) {
 		events <- StreamChunkReceived{Chunk: chunk}
 	}
 	if err := s.engine.runEventWithBeforeEffects(ctx, UserMessageSubmitted{Content: query}, chunkFunc, func() {
-		s.emitSnapshot(events, emittedMessages)
+		s.emitSnapshot(events, emittedMessages, emittedApproval)
 	}); err != nil {
 		events <- SessionError{Err: err}
 		return err
 	}
-	s.emitSnapshot(events, emittedMessages)
+	s.emitSnapshot(events, emittedMessages, emittedApproval)
 	for {
 		switch s.engine.State() {
 		case StateWaitingApproval:
-			s.emitSnapshot(events, emittedMessages)
+			s.emitSnapshot(events, emittedMessages, emittedApproval)
 			action, err := waitApproval(ctx, approvals)
 			if err != nil {
 				events <- SessionError{Err: err}
@@ -124,7 +133,7 @@ func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, appr
 				events <- SessionError{Err: err}
 				return err
 			}
-			s.emitSnapshot(events, emittedMessages)
+			s.emitSnapshot(events, emittedMessages, emittedApproval)
 		case StateIdle:
 			return nil
 		default:
