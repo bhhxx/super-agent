@@ -11,7 +11,7 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	toolRunner := runtime.ToolRunner(tools.NewBashTools())
+	toolRunner := runtime.ToolRunner(tools.NewRegistry(tools.BashTool{}))
 	if cfg.NoTools {
 		toolRunner = tools.NoTools{}
 	}

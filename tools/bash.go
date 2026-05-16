@@ -12,10 +12,6 @@ import (
 
 type BashTool struct{}
 
-func NewBashTools() *Registry {
-	return NewRegistry(BashTool{})
-}
-
 func (BashTool) Spec() runtime.ToolSpec {
 	return runtime.ToolSpec{
 		Name:        "bash",
