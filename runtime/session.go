@@ -18,11 +18,16 @@ type SessionEvent interface {
 }
 
 type StateChanged struct {
-	State    State
-	ToolCall *ToolCall
+	State State
 }
 
 func (StateChanged) isSessionEvent() {}
+
+type ToolApprovalRequested struct {
+	ToolCall ToolCall
+}
+
+func (ToolApprovalRequested) isSessionEvent() {}
 
 type StreamChunkReceived struct {
 	Chunk StreamChunk
@@ -84,7 +89,10 @@ func (s *Session) Snapshot() Snapshot {
 
 func (s *Session) emitSnapshot(events chan<- SessionEvent) {
 	snapshot := s.Snapshot()
-	events <- StateChanged{State: snapshot.State, ToolCall: snapshot.PendingTool}
+	events <- StateChanged{State: snapshot.State}
+	if snapshot.PendingTool != nil {
+		events <- ToolApprovalRequested{ToolCall: *snapshot.PendingTool}
+	}
 	messages := snapshot.Messages
 	if len(messages) > 0 {
 		msg := messages[len(messages)-1]

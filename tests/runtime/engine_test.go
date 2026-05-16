@@ -307,8 +307,7 @@ func TestCancelClearsPendingToolAndEffects(t *testing.T) {
 func waitForApproval(t *testing.T, events <-chan SessionEvent, approvals chan<- ConfirmationAction, check func()) {
 	t.Helper()
 	for ev := range events {
-		stateChanged, ok := ev.(StateChanged)
-		if ok && stateChanged.State == StateWaitingApproval && stateChanged.ToolCall != nil {
+		if _, ok := ev.(ToolApprovalRequested); ok {
 			if check != nil {
 				check()
 			}
@@ -392,8 +391,7 @@ func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 
 	var sawApproval bool
 	for ev := range events {
-		stateChanged, ok := ev.(StateChanged)
-		if ok && stateChanged.State == StateWaitingApproval && stateChanged.ToolCall != nil {
+		if _, ok := ev.(ToolApprovalRequested); ok {
 			sawApproval = true
 			approvals <- ConfirmOnce
 		}
