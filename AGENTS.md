@@ -37,6 +37,8 @@ Name tests by behavior, for example `TestToolCallFeedsResultBackToModel` or `Tes
 
 Recent history uses short conventional commits, such as `feat: refactor Claude role handling`, plus merge commits. Use concise imperative messages: `fix: preserve reasoning replay`, `test: cover approval cancel`.
 
+Name branches by work scope, not by one commit or PR title: `feat/session-events`, `fix/tool-approval`, `refactor/runtime-session`. Use commits for concrete steps and the PR title for the final merged result. With squash merge, make the PR title the final conventional commit; with rebase merge, keep every commit clean.
+
 Pull requests should include the purpose, main files changed, test command output, and any config needed to run locally. Link issues when relevant. Add screenshots only for visible TUI changes.
 
 ## Security & Configuration Tips
