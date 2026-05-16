@@ -481,7 +481,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		case "enter":
 			a.status = ""
-			if a.session.Snapshot().PendingTool == nil {
+			if a.session.Snapshot().PendingTool == nil && a.cancel == nil {
 				return a.submit()
 			}
 		}

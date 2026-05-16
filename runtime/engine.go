@@ -18,6 +18,10 @@ type Engine struct {
 	YOLOMode         bool
 }
 
+func toolCallKey(call ToolCall) string {
+	return call.Name + ":" + call.Input
+}
+
 func NewEngine(model Model, tools ToolRunner, initial []Message) *Engine {
 	return NewEngineWithExecutor(NewDefaultEffectExecutor(model, tools), initial)
 }
@@ -103,7 +107,7 @@ func (e *Engine) ApproveAlways(ctx context.Context, chunkFunc func(StreamChunk))
 		return errors.New("no tool is waiting for approval")
 	}
 	call := *e.pendingTool
-	e.alwaysAllow[call.Name] = true
+	e.alwaysAllow[toolCallKey(call)] = true
 	err := e.dispatchLocked(ApprovalGranted{Call: call})
 	e.mu.Unlock()
 	if err != nil {
@@ -238,7 +242,7 @@ func (e *Engine) needsApproval(call ToolCall) bool {
 }
 
 func (e *Engine) needsApprovalLocked(call ToolCall) bool {
-	return call.Risky && !e.alwaysAllow[call.Name] && !e.YOLOMode
+	return call.Risky && !e.alwaysAllow[toolCallKey(call)] && !e.YOLOMode
 }
 
 func (e *Engine) nextQueuedTool() (*ToolCall, bool) {

@@ -45,6 +45,7 @@ func Transition(state State, event Event) (Decision, error) {
 		}
 		message := Message{
 			Role:             RoleAssistant,
+			Content:          ev.FinalAnswer,
 			ReasoningContent: ev.ReasoningContent,
 			ToolCalls:        toolCalls,
 		}

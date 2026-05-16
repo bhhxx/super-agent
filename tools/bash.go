@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"strings"
 
@@ -32,6 +33,9 @@ func (BashTool) Spec() runtime.ToolSpec {
 
 func (BashTool) Run(ctx context.Context, call runtime.ToolCall) (string, error) {
 	command := bashCommand(call.Input)
+	if command == "" {
+		return "", errors.New("invalid bash command input: must be JSON with 'command' field")
+	}
 	output, err := exec.CommandContext(ctx, "bash", "-lc", command).CombinedOutput()
 	if err == nil {
 		return string(output), nil
@@ -49,10 +53,10 @@ func bashCommand(input string) string {
 	var args struct {
 		Command string `json:"command"`
 	}
-	if err := json.Unmarshal([]byte(input), &args); err == nil && args.Command != "" {
+	if err := json.Unmarshal([]byte(input), &args); err == nil {
 		return args.Command
 	}
-	return input
+	return ""
 }
 
 func failedCommandResult(output []byte, err error) string {
