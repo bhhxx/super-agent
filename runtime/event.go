@@ -17,17 +17,19 @@ type AssistantMessageReceived struct {
 
 func (AssistantMessageReceived) isEvent() {}
 
-type ToolCallRequested struct {
-	Call             ToolCall
+type ToolCallsRequested struct {
+	Calls            []ToolCall
 	ReasoningContent string
 	NeedsApproval    bool
 }
 
-func (ToolCallRequested) isEvent() {}
+func (ToolCallsRequested) isEvent() {}
 
 type ToolResultReceived struct {
-	Call   ToolCall
-	Result string
+	Call              ToolCall
+	Result            string
+	NextCall          *ToolCall
+	NextNeedsApproval bool
 }
 
 func (ToolResultReceived) isEvent() {}
@@ -39,7 +41,9 @@ type ApprovalGranted struct {
 func (ApprovalGranted) isEvent() {}
 
 type ApprovalDenied struct {
-	Call ToolCall
+	Call              ToolCall
+	NextCall          *ToolCall
+	NextNeedsApproval bool
 }
 
 func (ApprovalDenied) isEvent() {}

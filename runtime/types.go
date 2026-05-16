@@ -10,7 +10,6 @@ const (
 	StateWaitingLLM      State = "WaitingLLM"
 	StateWaitingApproval State = "WaitingApproval"
 	StateRunningTool     State = "RunningTool"
-	StateWaitingTool     State = "WaitingTool"
 )
 
 type Role string
@@ -46,7 +45,7 @@ type ToolSpec struct {
 type ModelResponse struct {
 	FinalAnswer      string
 	ReasoningContent string
-	ToolCall         *ToolCall
+	ToolCalls        []ToolCall
 }
 
 type StreamChunk struct {

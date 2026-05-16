@@ -3,8 +3,11 @@ package llm_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	. "super-agent/llm"
@@ -79,6 +82,42 @@ func TestOpenAIModelSendsChatCompletion(t *testing.T) {
 	}
 }
 
+func TestOpenAIModelUsesSDKDefaultBaseURLWhenConfigBaseURLIsEmpty(t *testing.T) {
+	unsetEnv(t, "OPENAI_BASE_URL")
+	originalTransport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+	var sawDefaultBaseURL bool
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Scheme == "https" && req.URL.Host == "api.openai.com" && req.URL.Path == "/v1/chat/completions" {
+			sawDefaultBaseURL = true
+		}
+		body := io.NopCloser(strings.NewReader("data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    req,
+		}, nil
+	})
+
+	model := NewOpenAIModel(Config{
+		APIKey: "test-key",
+		Model:  "test-model",
+	})
+	resp, err := model.Next(context.Background(), []runtime.Message{
+		{Role: runtime.RoleUser, Content: "hi"},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if !sawDefaultBaseURL {
+		t.Fatal("request did not use OpenAI SDK default base URL")
+	}
+	if resp.FinalAnswer != "ok" {
+		t.Fatalf("FinalAnswer = %q, want ok", resp.FinalAnswer)
+	}
+}
+
 func TestOpenAIModelReplaysReasoningContent(t *testing.T) {
 	var requestBody struct {
 		Messages []map[string]any `json:"messages"`
@@ -108,6 +147,27 @@ func TestOpenAIModelReplaysReasoningContent(t *testing.T) {
 	}
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	old, ok := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if ok {
+			_ = os.Setenv(key, old)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+}
+
 func TestOpenAIModelMarksRiskyToolCalls(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -122,7 +182,32 @@ func TestOpenAIModelMarksRiskyToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	if resp.ToolCall == nil || resp.ToolCall.Name != "bash" || !resp.ToolCall.Risky {
-		t.Fatalf("ToolCall = %+v", resp.ToolCall)
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "bash" || !resp.ToolCalls[0].Risky {
+		t.Fatalf("ToolCalls = %+v", resp.ToolCalls)
+	}
+}
+
+func TestOpenAIModelReturnsAllToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"first\",\"arguments\":\"{}\"}},{\"index\":1,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"second\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	model := NewOpenAIModel(Config{BaseURL: server.URL, APIKey: "test-key", Model: "test-model"})
+	resp, err := model.Next(context.Background(), []runtime.Message{
+		{Role: runtime.RoleUser, Content: "use tools"},
+	}, []runtime.ToolSpec{{Name: "first"}, {Name: "second", Risky: true}}, nil)
+	if err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if len(resp.ToolCalls) != 2 {
+		t.Fatalf("ToolCalls = %+v, want two", resp.ToolCalls)
+	}
+	if resp.ToolCalls[0].Name != "first" || resp.ToolCalls[1].Name != "second" {
+		t.Fatalf("ToolCalls = %+v, want first then second", resp.ToolCalls)
+	}
+	if !resp.ToolCalls[1].Risky {
+		t.Fatalf("second call was not marked risky: %+v", resp.ToolCalls[1])
 	}
 }

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,7 +31,6 @@ type Styles struct {
 	Version          lipgloss.Style
 	ViewportBorder   lipgloss.Style
 	InputFocused     lipgloss.Style
-	InputBlurred     lipgloss.Style
 	MarkdownRenderer *glamour.TermRenderer
 }
 
@@ -71,11 +69,6 @@ func DefaultStyles() Styles {
 		BorderForeground(accent).
 		Padding(0, 1)
 
-	s.InputBlurred = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(secondary).
-		Padding(0, 1)
-
 	renderer, _ := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(0),
@@ -86,7 +79,7 @@ func DefaultStyles() Styles {
 }
 
 type App struct {
-	engine          *runtime.Engine
+	session         Conversation
 	input           textinput.Model
 	viewport        viewport.Model
 	spinner         spinner.Model
@@ -101,30 +94,38 @@ type App struct {
 	status          string
 	lastCmd         string
 	cancel          context.CancelFunc
-	streamCh        chan runtime.StreamChunk
+	eventsCh        chan runtime.SessionEvent
+	approvalsCh     chan runtime.ConfirmationAction
 	streamContent   string
 	streamReasoning string
+}
+
+type Conversation interface {
+	Snapshot() runtime.Snapshot
+	Run(context.Context, string, chan<- runtime.SessionEvent, <-chan runtime.ConfirmationAction) error
+	Cancel() error
+	Reset()
 }
 
 type submitDoneMsg struct {
 	err error
 }
 
-type streamMsg struct {
-	chunk runtime.StreamChunk
+type sessionEventMsg struct {
+	event runtime.SessionEvent
 }
 
-func waitForStream(ch <-chan runtime.StreamChunk) tea.Cmd {
+func waitForEvent(ch <-chan runtime.SessionEvent) tea.Cmd {
 	return func() tea.Msg {
-		chunk, ok := <-ch
+		event, ok := <-ch
 		if !ok {
 			return nil
 		}
-		return streamMsg{chunk: chunk}
+		return sessionEventMsg{event: event}
 	}
 }
 
-func New(engine *runtime.Engine) App {
+func New(session Conversation) App {
 	styles := DefaultStyles()
 
 	input := textinput.New()
@@ -140,12 +141,13 @@ func New(engine *runtime.Engine) App {
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 
 	return App{
-		engine:   engine,
-		input:    input,
-		spinner:  s,
-		styles:   styles,
-		history:  []string{},
-		streamCh: make(chan runtime.StreamChunk, 100),
+		session:     session,
+		input:       input,
+		spinner:     s,
+		styles:      styles,
+		history:     []string{},
+		eventsCh:    make(chan runtime.SessionEvent, 100),
+		approvalsCh: make(chan runtime.ConfirmationAction, 1),
 	}
 }
 
@@ -153,19 +155,20 @@ func (a App) Init() tea.Cmd {
 	return tea.Batch(
 		textinput.Blink,
 		a.spinner.Tick,
-		waitForStream(a.streamCh),
+		waitForEvent(a.eventsCh),
 	)
 }
 
 func (a App) headerView() string {
 	var icon string
-	state := a.engine.State()
+	snapshot := a.session.Snapshot()
+	state := snapshot.State
 	switch state {
 	case runtime.StateWaitingLLM:
 		icon = a.spinner.View()
 	case runtime.StateWaitingApproval:
 		icon = "✋"
-	case runtime.StateRunningTool, runtime.StateWaitingTool:
+	case runtime.StateRunningTool:
 		icon = a.spinner.View()
 	default:
 		icon = "◇"
@@ -176,49 +179,7 @@ func (a App) headerView() string {
 
 	header := title + status
 	version := a.styles.Version.Width(a.width - lipgloss.Width(header)).Render("v0.1.0")
-
-	res := header + version + "\n"
-
-	// Extract topic
-	var topicTitle, topicSummary string
-	messages := a.engine.Messages()
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Role == runtime.RoleAssistant && len(msg.ToolCalls) > 0 {
-			for _, tc := range msg.ToolCalls {
-				if tc.Name == "update_topic" {
-					var args struct {
-						Title   string `json:"title"`
-						Summary string `json:"summary"`
-					}
-					if json.Unmarshal([]byte(tc.Input), &args) == nil {
-						topicTitle = args.Title
-						topicSummary = args.Summary
-						break
-					}
-				}
-			}
-		}
-		if topicTitle != "" {
-			break
-		}
-	}
-
-	if topicTitle != "" {
-		topicView := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("6")).
-			Bold(true).
-			Padding(0, 1).
-			Render("TOPIC: " + topicTitle)
-		summaryView := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("8")).
-			Italic(true).
-			Padding(0, 1).
-			Render(topicSummary)
-		res += topicView + "\n" + summaryView + "\n"
-	}
-
-	return res
+	return header + version + "\n"
 }
 
 func (a App) footerView() string {
@@ -236,7 +197,7 @@ func (a App) footerView() string {
 		b.WriteString(a.styles.Footer.Render(" Last: "+a.lastCmd) + "\n")
 	}
 
-	if call, ok := a.engine.PendingTool(); ok {
+	if call := a.session.Snapshot().PendingTool; call != nil {
 		prompt := lipgloss.NewStyle().
 			Background(lipgloss.Color("3")).
 			Foreground(lipgloss.Color("0")).
@@ -265,7 +226,7 @@ func (a App) footerView() string {
 	return b.String()
 }
 
-func (a App) renderMarkdown(content string, width int) string {
+func (a App) renderMarkdown(content string) string {
 	if a.styles.MarkdownRenderer == nil {
 		return content
 	}
@@ -285,30 +246,9 @@ func (a App) contentString() string {
 	}
 	wrapStyle := lipgloss.NewStyle().Width(width).Padding(0, 1)
 
-	messages := a.engine.Messages()
+	snapshot := a.session.Snapshot()
+	messages := snapshot.Messages
 	for i, msg := range messages {
-		// Skip update_topic messages to keep UI clean
-		if msg.Role == runtime.RoleTool {
-			isUpdateTopic := false
-			for j := i - 1; j >= 0; j-- {
-				if messages[j].Role == runtime.RoleAssistant {
-					for _, tc := range messages[j].ToolCalls {
-						if tc.ID == msg.ToolCallID && tc.Name == "update_topic" {
-							isUpdateTopic = true
-							break
-						}
-					}
-					break
-				}
-			}
-			if isUpdateTopic {
-				continue
-			}
-		}
-		if msg.Role == runtime.RoleAssistant && len(msg.ToolCalls) == 1 && msg.ToolCalls[0].Name == "update_topic" && msg.Content == "" {
-			continue
-		}
-
 		var msgBlock strings.Builder
 
 		role := strings.ToUpper(string(msg.Role))
@@ -355,7 +295,7 @@ func (a App) contentString() string {
 			}
 			if msg.Content != "" {
 				if msg.Role == "assistant" {
-					msgBlock.WriteString(a.renderMarkdown(msg.Content, width))
+					msgBlock.WriteString(a.renderMarkdown(msg.Content))
 				} else {
 					msgBlock.WriteString(msg.Content)
 				}
@@ -366,7 +306,7 @@ func (a App) contentString() string {
 		b.WriteString(wrapStyle.Render(msgBlock.String()) + "\n\n")
 	}
 
-	if a.engine.State() == runtime.StateWaitingLLM {
+	if snapshot.State == runtime.StateWaitingLLM {
 		var streamBlock strings.Builder
 		streamBlock.WriteString(a.styles.AgentLabel.Render("AGENT") + "\n")
 
@@ -414,7 +354,7 @@ func ExtractCodeBlocks(content string) []string {
 }
 
 func (a *App) copyLastCodeBlock() tea.Cmd {
-	messages := a.engine.Messages()
+	messages := a.session.Snapshot().Messages
 	for i := len(messages) - 1; i >= 0; i-- {
 		blocks := ExtractCodeBlocks(messages[i].Content)
 		if len(blocks) > 0 {
@@ -435,10 +375,21 @@ func (a *App) copyLastCodeBlock() tea.Cmd {
 	return nil
 }
 
+func (a *App) cancelRun() {
+	if a.session.Snapshot().PendingTool != nil {
+		if err := a.session.Cancel(); err != nil {
+			a.err = err.Error()
+		}
+	}
+	if a.cancel != nil {
+		a.cancel()
+		a.cancel = nil
+	}
+}
+
 func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var (
-		cmd  tea.Cmd
-		cmds []tea.Cmd
+		cmd tea.Cmd
 	)
 
 	switch msg := msg.(type) {
@@ -481,15 +432,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "ctrl+c":
-			if _, ok := a.engine.PendingTool(); ok {
-				if err := a.engine.Cancel(); err != nil {
-					a.err = err.Error()
-				}
-				return a, nil
-			}
-			if a.cancel != nil {
-				a.cancel()
-				a.cancel = nil
+			if a.session.Snapshot().PendingTool != nil || a.cancel != nil {
+				a.cancelRun()
 				return a, nil
 			}
 			return a, tea.Quit
@@ -502,15 +446,8 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+y":
 			return a, a.copyLastCodeBlock()
 		case "esc":
-			if _, ok := a.engine.PendingTool(); ok {
-				if err := a.engine.Cancel(); err != nil {
-					a.err = err.Error()
-				}
-				return a, nil
-			}
-			if a.cancel != nil {
-				a.cancel()
-				a.cancel = nil
+			if a.session.Snapshot().PendingTool != nil || a.cancel != nil {
+				a.cancelRun()
 				return a, nil
 			}
 			return a, tea.Quit
@@ -544,24 +481,31 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		case "enter":
 			a.status = ""
-			if _, ok := a.engine.PendingTool(); !ok {
+			if a.session.Snapshot().PendingTool == nil {
 				return a.submit()
 			}
 		}
 
-		if _, ok := a.engine.PendingTool(); ok {
+		if a.session.Snapshot().PendingTool != nil {
 			a.status = ""
 			return a.handleApprovalKey(msg)
 		}
 
-	case streamMsg:
-		a.streamContent += msg.chunk.ContentDelta
-		a.streamReasoning += msg.chunk.ReasoningContentDelta
+	case sessionEventMsg:
+		switch event := msg.event.(type) {
+		case runtime.SessionError:
+			if !errors.Is(event.Err, context.Canceled) {
+				a.err = event.Err.Error()
+			}
+		case runtime.StreamChunkReceived:
+			a.streamContent += event.Chunk.ContentDelta
+			a.streamReasoning += event.Chunk.ReasoningContentDelta
+		}
 		a.viewport.SetContent(a.contentString())
 		if a.viewport.AtBottom() {
 			a.viewport.GotoBottom()
 		}
-		return a, waitForStream(a.streamCh)
+		return a, waitForEvent(a.eventsCh)
 
 	case submitDoneMsg:
 		a.cancel = nil
@@ -578,8 +522,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	a.input, cmd = a.input.Update(msg)
-	cmds = append(cmds, cmd)
-	return a, tea.Batch(cmds...)
+	return a, cmd
 }
 
 func (a App) helpView() string {
@@ -654,7 +597,7 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 		cmd := parts[0]
 		switch cmd {
 		case "/clear", "/reset":
-			a.engine.Reset()
+			a.session.Reset()
 			a.viewport.SetContent("")
 			a.err = ""
 			a.lastCmd = "Conversation reset"
@@ -674,55 +617,32 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 	a.streamContent = ""
 	a.streamReasoning = ""
 	a.input.SetValue("")
-	chunkFunc := func(chunk runtime.StreamChunk) {
-		a.streamCh <- chunk
+	a.eventsCh = make(chan runtime.SessionEvent, 100)
+	a.approvalsCh = make(chan runtime.ConfirmationAction, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancel = cancel
+	a.viewport.SetContent(a.contentString())
+	a.viewport.GotoBottom()
+	runCmd := func() tea.Msg {
+		return submitDoneMsg{err: a.session.Run(ctx, text, a.eventsCh, a.approvalsCh)}
 	}
-	err := a.engine.BeginUserMessage(text)
-	if err == nil {
-		ctx, cancel := context.WithCancel(context.Background())
-		a.cancel = cancel
-		a.viewport.SetContent(a.contentString())
-		a.viewport.GotoBottom()
-		return a, func() tea.Msg {
-			return submitDoneMsg{err: a.engine.Continue(ctx, chunkFunc)}
-		}
-	}
-	if err != nil {
-		a.err = err.Error()
-	}
-	return a, nil
+	return a, tea.Batch(waitForEvent(a.eventsCh), runCmd)
 }
 
 func (a App) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	chunkFunc := func(chunk runtime.StreamChunk) {
-		a.streamCh <- chunk
-	}
+	var action runtime.ConfirmationAction
 	switch strings.ToLower(msg.String()) {
 	case "y":
-		a.streamContent = ""
-		a.streamReasoning = ""
-		ctx, cancel := context.WithCancel(context.Background())
-		a.cancel = cancel
-		return a, func() tea.Msg {
-			return submitDoneMsg{err: a.engine.Approve(ctx, chunkFunc)}
-		}
+		action = runtime.ConfirmOnce
 	case "a":
-		a.streamContent = ""
-		a.streamReasoning = ""
-		ctx, cancel := context.WithCancel(context.Background())
-		a.cancel = cancel
-		return a, func() tea.Msg {
-			return submitDoneMsg{err: a.engine.ApproveAlways(ctx, chunkFunc)}
-		}
+		action = runtime.ConfirmAlways
 	case "n":
-		a.streamContent = ""
-		a.streamReasoning = ""
-		ctx, cancel := context.WithCancel(context.Background())
-		a.cancel = cancel
-		return a, func() tea.Msg {
-			return submitDoneMsg{err: a.engine.Deny(ctx, chunkFunc)}
-		}
+		action = runtime.ConfirmDeny
 	default:
 		return a, nil
 	}
+	a.streamContent = ""
+	a.streamReasoning = ""
+	a.approvalsCh <- action
+	return a, nil
 }

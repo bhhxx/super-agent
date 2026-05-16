@@ -33,6 +33,18 @@ func (t *fakeTool) Specs() []ToolSpec {
 	return nil
 }
 
+func runSession(t *testing.T, engine *Engine, content string) {
+	t.Helper()
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ConfirmationAction, 1)
+	if err := session.Run(context.Background(), content, events, approvals); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	for range events {
+	}
+}
+
 func TestNewEngineStartsInitializingAndReadyEntersIdle(t *testing.T) {
 	engine := NewEngine(&scriptedModel{}, &fakeTool{}, nil)
 
@@ -45,16 +57,14 @@ func TestNewEngineStartsInitializingAndReadyEntersIdle(t *testing.T) {
 	}
 }
 
-func TestSubmitUserMessageProducesFinalAnswer(t *testing.T) {
+func TestSessionRunProducesFinalAnswer(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
 		{FinalAnswer: "hello", ReasoningContent: "thinking"},
 	}}
 	engine := NewEngine(model, &fakeTool{}, nil)
 	engine.Ready()
 
-	if err := engine.SubmitUserMessage(context.Background(), "hi", nil); err != nil {
-		t.Fatalf("SubmitUserMessage failed: %v", err)
-	}
+	runSession(t, engine, "hi")
 
 	if engine.State() != StateIdle {
 		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
@@ -64,18 +74,43 @@ func TestSubmitUserMessageProducesFinalAnswer(t *testing.T) {
 	}
 }
 
+type recordingExecutor struct {
+	effects []Effect
+}
+
+func (x *recordingExecutor) Execute(_ context.Context, effect Effect, _ EffectContext, _ func(StreamChunk)) (Event, error) {
+	x.effects = append(x.effects, effect)
+	return AssistantMessageReceived{Response: ModelResponse{FinalAnswer: "from executor"}}, nil
+}
+
+func TestEngineRunsEffectsThroughInjectedExecutor(t *testing.T) {
+	executor := &recordingExecutor{}
+	engine := NewEngineWithExecutor(executor, nil)
+	engine.Ready()
+
+	runSession(t, engine, "hi")
+
+	if len(executor.effects) != 1 {
+		t.Fatalf("effects = %+v, want one", executor.effects)
+	}
+	if _, ok := executor.effects[0].(CallModel); !ok {
+		t.Fatalf("effect = %T, want CallModel", executor.effects[0])
+	}
+	if got := engine.Messages()[1]; got.Content != "from executor" {
+		t.Fatalf("assistant message = %+v", got)
+	}
+}
+
 func TestToolCallFeedsResultBackToModel(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCall: &ToolCall{Name: "bash", Input: "printf pong"}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf pong"}}},
 		{FinalAnswer: "tool said pong"},
 	}}
 	tools := &fakeTool{results: map[string]string{"bash": "pong"}}
 	engine := NewEngine(model, tools, nil)
 	engine.Ready()
 
-	if err := engine.SubmitUserMessage(context.Background(), "use bash", nil); err != nil {
-		t.Fatalf("SubmitUserMessage failed: %v", err)
-	}
+	runSession(t, engine, "use bash")
 
 	if engine.State() != StateIdle {
 		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
@@ -89,18 +124,68 @@ func TestToolCallFeedsResultBackToModel(t *testing.T) {
 	}
 }
 
+func TestMultipleToolCallsFeedAllResultsBackToModel(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{
+			{ID: "call-1", Name: "first"},
+			{ID: "call-2", Name: "second"},
+		}},
+		{FinalAnswer: "done"},
+	}}
+	tools := &fakeTool{results: map[string]string{"first": "one", "second": "two"}}
+	engine := NewEngine(model, tools, nil)
+	engine.Ready()
+
+	runSession(t, engine, "use tools")
+
+	if len(tools.calls) != 2 {
+		t.Fatalf("tool calls = %+v, want two", tools.calls)
+	}
+	if tools.calls[0].Name != "first" || tools.calls[1].Name != "second" {
+		t.Fatalf("tool calls = %+v, want first then second", tools.calls)
+	}
+	messages := engine.Messages()
+	if len(messages) < 4 {
+		t.Fatalf("messages = %+v, want assistant plus two tool results", messages)
+	}
+	if got := messages[1]; got.Role != RoleAssistant || len(got.ToolCalls) != 2 {
+		t.Fatalf("assistant tool calls = %+v", got)
+	}
+	if messages[2].Role != RoleTool || messages[2].Content != "one" || messages[2].ToolCallID != "call-1" {
+		t.Fatalf("first tool result = %+v", messages[2])
+	}
+	if messages[3].Role != RoleTool || messages[3].Content != "two" || messages[3].ToolCallID != "call-2" {
+		t.Fatalf("second tool result = %+v", messages[3])
+	}
+}
+
 func TestRiskyToolWaitsForShortcutApproval(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCall: &ToolCall{Name: "bash", Input: "rm -rf /", Risky: true}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /", Risky: true}}},
 		{FinalAnswer: "approved"},
 	}}
 	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
 	engine := NewEngine(model, tools, nil)
 	engine.Ready()
 
-	if err := engine.SubmitUserMessage(context.Background(), "danger", nil); err != nil {
-		t.Fatalf("SubmitUserMessage failed: %v", err)
-	}
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ConfirmationAction, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Run(context.Background(), "danger", events, approvals)
+	}()
+	waitForApproval(t, events, approvals, func() {
+		if engine.State() != StateWaitingApproval {
+			t.Fatalf("state = %s, want %s", engine.State(), StateWaitingApproval)
+		}
+		if _, ok := engine.PendingTool(); !ok {
+			t.Fatal("pending tool not found")
+		}
+		if len(tools.calls) != 0 {
+			t.Fatalf("tool ran before approval: %+v", tools.calls)
+		}
+	})
 	if engine.State() != StateWaitingApproval {
 		t.Fatalf("state = %s, want %s", engine.State(), StateWaitingApproval)
 	}
@@ -111,8 +196,9 @@ func TestRiskyToolWaitsForShortcutApproval(t *testing.T) {
 		t.Fatalf("tool ran before approval: %+v", tools.calls)
 	}
 
-	if err := engine.Approve(context.Background(), nil); err != nil {
-		t.Fatalf("Approve failed: %v", err)
+	approvals <- ConfirmOnce
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
 	}
 	if engine.State() != StateIdle {
 		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
@@ -183,25 +269,173 @@ func TestCancelRequestedReturnsRuntimeToIdle(t *testing.T) {
 
 func TestCancelClearsPendingToolAndEffects(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCall: &ToolCall{Name: "bash", Input: "rm -rf /", Risky: true}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /", Risky: true}}},
 	}}
 	engine := NewEngine(model, &fakeTool{}, nil)
 	engine.Ready()
 
-	if err := engine.SubmitUserMessage(context.Background(), "danger", nil); err != nil {
-		t.Fatalf("SubmitUserMessage failed: %v", err)
-	}
+	session := NewSession(engine)
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ConfirmationAction, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Run(ctx, "danger", events, approvals)
+	}()
+	waitForApproval(t, events, approvals, nil)
 	if engine.State() != StateWaitingApproval {
 		t.Fatalf("state = %s, want %s", engine.State(), StateWaitingApproval)
 	}
 
-	if err := engine.Cancel(); err != nil {
+	if err := session.Cancel(); err != nil {
 		t.Fatalf("Cancel failed: %v", err)
+	}
+	cancel()
+	for range events {
+	}
+	if err := <-done; err == nil {
+		t.Fatal("Run succeeded after cancellation")
 	}
 	if engine.State() != StateIdle {
 		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
 	}
 	if _, ok := engine.PendingTool(); ok {
 		t.Fatal("pending tool still exists")
+	}
+}
+
+func waitForApproval(t *testing.T, events <-chan SessionEvent, approvals chan<- ConfirmationAction, check func()) {
+	t.Helper()
+	for ev := range events {
+		if _, ok := ev.(ToolApprovalRequested); ok {
+			if check != nil {
+				check()
+			}
+			return
+		}
+	}
+	t.Fatal("approval event not emitted")
+}
+
+func TestSessionRunStartsAndFinishesRun(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{FinalAnswer: "hello"},
+	}}
+	engine := NewEngine(model, &fakeTool{}, nil)
+	engine.Ready()
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 10)
+	approvals := make(chan ConfirmationAction, 1)
+
+	if err := session.Run(context.Background(), "hi", events, approvals); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	for range events {
+	}
+	if session.Snapshot().State != StateIdle {
+		t.Fatalf("state = %s, want %s", session.Snapshot().State, StateIdle)
+	}
+}
+
+func TestSessionRunEmitsStateAndFinalMessage(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{FinalAnswer: "hello", ReasoningContent: "thinking"},
+	}}
+	engine := NewEngine(model, &fakeTool{}, nil)
+	engine.Ready()
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 10)
+	approvals := make(chan ConfirmationAction, 1)
+
+	if err := session.Run(context.Background(), "hi", events, approvals); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	var states []State
+	var final *Message
+	for ev := range events {
+		switch ev := ev.(type) {
+		case StateChanged:
+			states = append(states, ev.State)
+		case MessageAppended:
+			if ev.Message.Role == RoleAssistant {
+				final = &ev.Message
+			}
+		}
+	}
+
+	if len(states) < 2 || states[0] != StateWaitingLLM || states[len(states)-1] != StateIdle {
+		t.Fatalf("states = %+v, want WaitingLLM ... Idle", states)
+	}
+	if final == nil || final.Content != "hello" || final.ReasoningContent != "thinking" {
+		t.Fatalf("final = %+v", final)
+	}
+}
+
+func TestSessionRunEmitsEachAppendedMessageOnce(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{FinalAnswer: "hello"},
+	}}
+	engine := NewEngine(model, &fakeTool{}, nil)
+	engine.Ready()
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 10)
+	approvals := make(chan ConfirmationAction, 1)
+
+	if err := session.Run(context.Background(), "hi", events, approvals); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	var appended []Message
+	for ev := range events {
+		if ev, ok := ev.(MessageAppended); ok {
+			appended = append(appended, ev.Message)
+		}
+	}
+
+	if len(appended) != 2 {
+		t.Fatalf("appended = %+v, want user and assistant only once", appended)
+	}
+	if appended[0].Role != RoleUser || appended[0].Content != "hi" {
+		t.Fatalf("first appended = %+v", appended[0])
+	}
+	if appended[1].Role != RoleAssistant || appended[1].Content != "hello" {
+		t.Fatalf("second appended = %+v", appended[1])
+	}
+}
+
+func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok", Risky: true}}},
+		{FinalAnswer: "done"},
+	}}
+	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
+	engine := NewEngine(model, tools, nil)
+	engine.Ready()
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ConfirmationAction, 1)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Run(context.Background(), "run bash", events, approvals)
+	}()
+
+	var sawApproval bool
+	for ev := range events {
+		if _, ok := ev.(ToolApprovalRequested); ok {
+			sawApproval = true
+			approvals <- ConfirmOnce
+		}
+	}
+
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !sawApproval {
+		t.Fatal("approval event not emitted")
+	}
+	if len(tools.calls) != 1 {
+		t.Fatalf("tool calls = %+v, want one", tools.calls)
 	}
 }

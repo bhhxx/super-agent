@@ -45,12 +45,6 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 		Messages:  toClaudeMessages(messages),
 	}
 
-	if sysMsg := getClaudeSystemMessage(messages); sysMsg != "" {
-		params.System = []anthropic.TextBlockParam{
-			{Text: sysMsg},
-		}
-	}
-
 	if len(tools) > 0 {
 		params.Tools = toClaudeTools(tools)
 	}
@@ -58,7 +52,7 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 	stream := m.client.Messages.NewStreaming(ctx, params)
 	var finalAnswer string
 	var reasoningContent string
-	var toolCall *runtime.ToolCall
+	var toolCalls []runtime.ToolCall
 	var currentToolUseID string
 	var currentToolUseName string
 	var currentToolUseInput string
@@ -93,12 +87,15 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 			}
 		case "content_block_stop":
 			if currentToolUseID != "" {
-				toolCall = &runtime.ToolCall{
+				toolCalls = append(toolCalls, runtime.ToolCall{
 					ID:    currentToolUseID,
 					Name:  currentToolUseName,
 					Input: currentToolUseInput,
 					Risky: isRiskyTool(currentToolUseName, tools),
-				}
+				})
+				currentToolUseID = ""
+				currentToolUseName = ""
+				currentToolUseInput = ""
 			}
 		}
 	}
@@ -107,10 +104,10 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 		return runtime.ModelResponse{}, err
 	}
 
-	if toolCall != nil {
+	if len(toolCalls) > 0 {
 		return runtime.ModelResponse{
 			ReasoningContent: reasoningContent,
-			ToolCall:         toolCall,
+			ToolCalls:        toolCalls,
 		}, nil
 	}
 
@@ -216,13 +213,4 @@ func interfaceToStringSlice(v interface{}) []string {
 		return arr
 	}
 	return nil
-}
-
-func getClaudeSystemMessage(messages []runtime.Message) string {
-	for _, msg := range messages {
-		if msg.Role == "system" {
-			return msg.Content
-		}
-	}
-	return ""
 }

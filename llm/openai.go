@@ -28,13 +28,16 @@ type OpenAIModel struct {
 }
 
 func NewOpenAIModel(cfg Config) *OpenAIModel {
+	opts := []option.RequestOption{
+		option.WithAPIKey(cfg.APIKey),
+		option.WithHeader("X-Title", "SuperAgent"),
+	}
+	if cfg.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+	}
 	return &OpenAIModel{
-		client: openai.NewClient(
-			option.WithBaseURL(cfg.BaseURL),
-			option.WithAPIKey(cfg.APIKey),
-			option.WithHeader("X-Title", "SuperAgent"),
-		),
-		model: cfg.Model,
+		client: openai.NewClient(opts...),
+		model:  cfg.Model,
 	}
 }
 
@@ -92,15 +95,18 @@ func (m *OpenAIModel) Next(ctx context.Context, messages []runtime.Message, tool
 	}
 
 	if len(message.ToolCalls) > 0 {
-		call := message.ToolCalls[0]
-		return runtime.ModelResponse{
-			ReasoningContent: finalRC,
-			ToolCall: &runtime.ToolCall{
+		calls := make([]runtime.ToolCall, 0, len(message.ToolCalls))
+		for _, call := range message.ToolCalls {
+			calls = append(calls, runtime.ToolCall{
 				ID:    call.ID,
 				Name:  call.Function.Name,
 				Input: call.Function.Arguments,
 				Risky: isRiskyTool(call.Function.Name, tools),
-			},
+			})
+		}
+		return runtime.ModelResponse{
+			ReasoningContent: finalRC,
+			ToolCalls:        calls,
 		}, nil
 	}
 	return runtime.ModelResponse{
