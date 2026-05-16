@@ -108,7 +108,6 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 		return runtime.ModelResponse{
 			ReasoningContent: reasoningContent,
 			ToolCalls:        toolCalls,
-			ToolCall:         &toolCalls[0],
 		}, nil
 	}
 

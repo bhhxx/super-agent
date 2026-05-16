@@ -190,9 +190,6 @@ func responseToolCalls(resp ModelResponse) []ToolCall {
 	if len(resp.ToolCalls) > 0 {
 		return append([]ToolCall(nil), resp.ToolCalls...)
 	}
-	if resp.ToolCall != nil {
-		return []ToolCall{*resp.ToolCall}
-	}
 	return nil
 }
 

@@ -46,7 +46,6 @@ type ModelResponse struct {
 	FinalAnswer      string
 	ReasoningContent string
 	ToolCalls        []ToolCall
-	ToolCall         *ToolCall
 }
 
 type StreamChunk struct {

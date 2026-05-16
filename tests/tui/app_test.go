@@ -94,7 +94,7 @@ func TestQuestionMarkCanBeTypedInPrompt(t *testing.T) {
 
 func TestApprovalUsesShortcutKeys(t *testing.T) {
 	engine := runtime.NewEngine(&approvalModel{responses: []runtime.ModelResponse{
-		{ToolCall: &runtime.ToolCall{Name: "bash", Input: "printf ok", Risky: true}},
+		{ToolCalls: []runtime.ToolCall{{Name: "bash", Input: "printf ok", Risky: true}}},
 		{FinalAnswer: "done"},
 	}}, &recordingTools{results: map[string]string{"bash": "ok"}}, nil)
 	engine.Ready()
@@ -127,7 +127,7 @@ func TestApprovalUsesShortcutKeys(t *testing.T) {
 
 func TestEscCancelsPendingApproval(t *testing.T) {
 	engine := runtime.NewEngine(&approvalModel{responses: []runtime.ModelResponse{
-		{ToolCall: &runtime.ToolCall{Name: "bash", Input: "printf ok", Risky: true}},
+		{ToolCalls: []runtime.ToolCall{{Name: "bash", Input: "printf ok", Risky: true}}},
 	}}, &recordingTools{results: map[string]string{"bash": "ok"}}, nil)
 	engine.Ready()
 	session := runtime.NewSession(engine)

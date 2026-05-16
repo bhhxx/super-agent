@@ -104,7 +104,6 @@ func (m *OpenAIModel) Next(ctx context.Context, messages []runtime.Message, tool
 		return runtime.ModelResponse{
 			ReasoningContent: finalRC,
 			ToolCalls:        calls,
-			ToolCall:         &calls[0],
 		}, nil
 	}
 	return runtime.ModelResponse{

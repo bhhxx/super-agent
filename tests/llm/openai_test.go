@@ -122,8 +122,8 @@ func TestOpenAIModelMarksRiskyToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	if resp.ToolCall == nil || resp.ToolCall.Name != "bash" || !resp.ToolCall.Risky {
-		t.Fatalf("ToolCall = %+v", resp.ToolCall)
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "bash" || !resp.ToolCalls[0].Risky {
+		t.Fatalf("ToolCalls = %+v", resp.ToolCalls)
 	}
 }
 

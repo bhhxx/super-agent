@@ -103,7 +103,7 @@ func TestEngineRunsEffectsThroughInjectedExecutor(t *testing.T) {
 
 func TestToolCallFeedsResultBackToModel(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCall: &ToolCall{Name: "bash", Input: "printf pong"}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf pong"}}},
 		{FinalAnswer: "tool said pong"},
 	}}
 	tools := &fakeTool{results: map[string]string{"bash": "pong"}}
@@ -161,7 +161,7 @@ func TestMultipleToolCallsFeedAllResultsBackToModel(t *testing.T) {
 
 func TestRiskyToolWaitsForShortcutApproval(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCall: &ToolCall{Name: "bash", Input: "rm -rf /", Risky: true}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /", Risky: true}}},
 		{FinalAnswer: "approved"},
 	}}
 	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
@@ -269,7 +269,7 @@ func TestCancelRequestedReturnsRuntimeToIdle(t *testing.T) {
 
 func TestCancelClearsPendingToolAndEffects(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCall: &ToolCall{Name: "bash", Input: "rm -rf /", Risky: true}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /", Risky: true}}},
 	}}
 	engine := NewEngine(model, &fakeTool{}, nil)
 	engine.Ready()
@@ -375,7 +375,7 @@ func TestSessionRunEmitsStateAndFinalMessage(t *testing.T) {
 
 func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCall: &ToolCall{Name: "bash", Input: "printf ok", Risky: true}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok", Risky: true}}},
 		{FinalAnswer: "done"},
 	}}
 	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
