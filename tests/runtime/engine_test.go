@@ -74,6 +74,33 @@ func TestSessionRunProducesFinalAnswer(t *testing.T) {
 	}
 }
 
+type recordingExecutor struct {
+	effects []Effect
+}
+
+func (x *recordingExecutor) Execute(_ context.Context, effect Effect, _ EffectContext, _ func(StreamChunk)) (Event, error) {
+	x.effects = append(x.effects, effect)
+	return AssistantMessageReceived{Response: ModelResponse{FinalAnswer: "from executor"}}, nil
+}
+
+func TestEngineRunsEffectsThroughInjectedExecutor(t *testing.T) {
+	executor := &recordingExecutor{}
+	engine := NewEngineWithExecutor(executor, nil)
+	engine.Ready()
+
+	runSession(t, engine, "hi")
+
+	if len(executor.effects) != 1 {
+		t.Fatalf("effects = %+v, want one", executor.effects)
+	}
+	if _, ok := executor.effects[0].(CallModel); !ok {
+		t.Fatalf("effect = %T, want CallModel", executor.effects[0])
+	}
+	if got := engine.Messages()[1]; got.Content != "from executor" {
+		t.Fatalf("assistant message = %+v", got)
+	}
+}
+
 func TestToolCallFeedsResultBackToModel(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
 		{ToolCall: &ToolCall{Name: "bash", Input: "printf pong"}},

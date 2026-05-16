@@ -6,8 +6,7 @@ import (
 )
 
 type Engine struct {
-	model            Model
-	tools            ToolRunner
+	executor         EffectExecutor
 	state            State
 	messages         []Message
 	pendingTool      *ToolCall
@@ -18,10 +17,13 @@ type Engine struct {
 }
 
 func NewEngine(model Model, tools ToolRunner, initial []Message) *Engine {
+	return NewEngineWithExecutor(NewDefaultEffectExecutor(model, tools), initial)
+}
+
+func NewEngineWithExecutor(executor EffectExecutor, initial []Message) *Engine {
 	messages := append([]Message(nil), initial...)
 	return &Engine{
-		model:       model,
-		tools:       tools,
+		executor:    executor,
 		state:       StateInitializing,
 		messages:    messages,
 		alwaysAllow: make(map[string]bool),
@@ -159,31 +161,16 @@ func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChu
 }
 
 func (e *Engine) runEffect(ctx context.Context, effect Effect, chunkFunc func(StreamChunk)) error {
-	switch fx := effect.(type) {
-	case CallModel:
-		resp, err := e.model.Next(ctx, e.Messages(), e.tools.Specs(), chunkFunc)
-		if err != nil {
-			return err
-		}
-		calls := responseToolCalls(resp)
-		if len(calls) > 0 {
-			return e.dispatch(ToolCallsRequested{
-				Calls:            calls,
-				ReasoningContent: resp.ReasoningContent,
-				NeedsApproval:    e.needsApproval(calls[0]),
-			})
-		}
-		return e.dispatch(AssistantMessageReceived{Response: resp})
-	case RunTool:
-		result, err := e.tools.Run(ctx, fx.Call)
-		if err != nil {
-			return err
-		}
-		next, ok := e.nextQueuedTool()
-		return e.dispatch(ToolResultReceived{Call: fx.Call, Result: result, NextCall: next, NextNeedsApproval: ok && e.needsApproval(*next)})
-	default:
-		return errors.New("unknown effect")
+	event, err := e.executor.Execute(ctx, effect, EffectContext{
+		Messages:       e.Messages(),
+		ToolSpecs:      e.toolSpecs(),
+		NeedsApproval:  e.needsApproval,
+		NextQueuedTool: e.nextQueuedTool,
+	}, chunkFunc)
+	if err != nil {
+		return err
 	}
+	return e.dispatch(event)
 }
 
 func (e *Engine) needsApproval(call ToolCall) bool {
@@ -205,6 +192,13 @@ func responseToolCalls(resp ModelResponse) []ToolCall {
 	}
 	if resp.ToolCall != nil {
 		return []ToolCall{*resp.ToolCall}
+	}
+	return nil
+}
+
+func (e *Engine) toolSpecs() []ToolSpec {
+	if provider, ok := e.executor.(interface{ ToolSpecs() []ToolSpec }); ok {
+		return provider.ToolSpecs()
 	}
 	return nil
 }
