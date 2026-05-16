@@ -3,8 +3,11 @@ package llm_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 
 	. "super-agent/llm"
@@ -79,6 +82,42 @@ func TestOpenAIModelSendsChatCompletion(t *testing.T) {
 	}
 }
 
+func TestOpenAIModelUsesSDKDefaultBaseURLWhenConfigBaseURLIsEmpty(t *testing.T) {
+	unsetEnv(t, "OPENAI_BASE_URL")
+	originalTransport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+	var sawDefaultBaseURL bool
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Scheme == "https" && req.URL.Host == "api.openai.com" && req.URL.Path == "/v1/chat/completions" {
+			sawDefaultBaseURL = true
+		}
+		body := io.NopCloser(strings.NewReader("data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    req,
+		}, nil
+	})
+
+	model := NewOpenAIModel(Config{
+		APIKey: "test-key",
+		Model:  "test-model",
+	})
+	resp, err := model.Next(context.Background(), []runtime.Message{
+		{Role: runtime.RoleUser, Content: "hi"},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if !sawDefaultBaseURL {
+		t.Fatal("request did not use OpenAI SDK default base URL")
+	}
+	if resp.FinalAnswer != "ok" {
+		t.Fatalf("FinalAnswer = %q, want ok", resp.FinalAnswer)
+	}
+}
+
 func TestOpenAIModelReplaysReasoningContent(t *testing.T) {
 	var requestBody struct {
 		Messages []map[string]any `json:"messages"`
@@ -106,6 +145,27 @@ func TestOpenAIModelReplaysReasoningContent(t *testing.T) {
 	if got := requestBody.Messages[0]["reasoning_content"]; got != "old thinking" {
 		t.Fatalf("replayed reasoning_content = %v", got)
 	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func unsetEnv(t *testing.T, key string) {
+	t.Helper()
+	old, ok := os.LookupEnv(key)
+	if err := os.Unsetenv(key); err != nil {
+		t.Fatalf("unset %s: %v", key, err)
+	}
+	t.Cleanup(func() {
+		if ok {
+			_ = os.Setenv(key, old)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
 }
 
 func TestOpenAIModelMarksRiskyToolCalls(t *testing.T) {

@@ -8,7 +8,14 @@
 
 请查看 `arch.md`
 
-## 致谢
+## TODO
 
-- 感谢 [baby-agent](https://github.com/baby-llm/baby-agent) 中对于 agent 实现细节的阐述
+- [ ] MCP 兼容
+- [ ] skill 兼容
+- [ ] 系统提示词配置
+- [ ] AGENTS.md 读取
+- [ ] 记忆机制
+- [ ] 持久化的 session
+- [ ] ui 优化
 
+![](./static/ui.png)

@@ -28,13 +28,16 @@ type OpenAIModel struct {
 }
 
 func NewOpenAIModel(cfg Config) *OpenAIModel {
+	opts := []option.RequestOption{
+		option.WithAPIKey(cfg.APIKey),
+		option.WithHeader("X-Title", "SuperAgent"),
+	}
+	if cfg.BaseURL != "" {
+		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
+	}
 	return &OpenAIModel{
-		client: openai.NewClient(
-			option.WithBaseURL(cfg.BaseURL),
-			option.WithAPIKey(cfg.APIKey),
-			option.WithHeader("X-Title", "SuperAgent"),
-		),
-		model: cfg.Model,
+		client: openai.NewClient(opts...),
+		model:  cfg.Model,
 	}
 }
 

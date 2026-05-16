@@ -59,6 +59,19 @@ func TestBashToolsRunCommand(t *testing.T) {
 	}
 }
 
+func TestBashToolsReturnsFailedCommandOutputWithoutError(t *testing.T) {
+	got, err := NewBashTools().Run(context.Background(), runtime.ToolCall{
+		Name:  "bash",
+		Input: `{"command":"printf before; exit 7"}`,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if !strings.Contains(got, "before") || !strings.Contains(got, "exit status 7") {
+		t.Fatalf("result = %q, want command output and exit status", got)
+	}
+}
+
 func TestNoToolsExposesNoSpecs(t *testing.T) {
 	if specs := (NoTools{}).Specs(); len(specs) != 0 {
 		t.Fatalf("specs = %+v, want none", specs)

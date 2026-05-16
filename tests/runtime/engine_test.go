@@ -372,6 +372,38 @@ func TestSessionRunEmitsStateAndFinalMessage(t *testing.T) {
 	}
 }
 
+func TestSessionRunEmitsEachAppendedMessageOnce(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{FinalAnswer: "hello"},
+	}}
+	engine := NewEngine(model, &fakeTool{}, nil)
+	engine.Ready()
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 10)
+	approvals := make(chan ConfirmationAction, 1)
+
+	if err := session.Run(context.Background(), "hi", events, approvals); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	var appended []Message
+	for ev := range events {
+		if ev, ok := ev.(MessageAppended); ok {
+			appended = append(appended, ev.Message)
+		}
+	}
+
+	if len(appended) != 2 {
+		t.Fatalf("appended = %+v, want user and assistant only once", appended)
+	}
+	if appended[0].Role != RoleUser || appended[0].Content != "hi" {
+		t.Fatalf("first appended = %+v", appended[0])
+	}
+	if appended[1].Role != RoleAssistant || appended[1].Content != "hello" {
+		t.Fatalf("second appended = %+v", appended[1])
+	}
+}
+
 func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
 		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok", Risky: true}}},

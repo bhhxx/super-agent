@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
+	"strings"
 
 	"super-agent/runtime"
 )
@@ -32,6 +33,15 @@ func (BashTool) Spec() runtime.ToolSpec {
 func (BashTool) Run(ctx context.Context, call runtime.ToolCall) (string, error) {
 	command := bashCommand(call.Input)
 	output, err := exec.CommandContext(ctx, "bash", "-lc", command).CombinedOutput()
+	if err == nil {
+		return string(output), nil
+	}
+	if ctx.Err() != nil {
+		return string(output), ctx.Err()
+	}
+	if _, ok := err.(*exec.ExitError); ok {
+		return failedCommandResult(output, err), nil
+	}
 	return string(output), err
 }
 
@@ -43,4 +53,12 @@ func bashCommand(input string) string {
 		return args.Command
 	}
 	return input
+}
+
+func failedCommandResult(output []byte, err error) string {
+	result := string(output)
+	if result != "" && !strings.HasSuffix(result, "\n") {
+		result += "\n"
+	}
+	return result + err.Error()
 }
