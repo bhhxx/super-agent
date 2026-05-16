@@ -4,6 +4,19 @@ type Mutation interface {
 	isMutation()
 }
 
+// AllMutations lists every Mutation type
+var AllMutations = []Mutation{
+	AppendUserMessage{},
+	AppendAssistantMessage{},
+	AppendToolResult{},
+	SetPendingTool{},
+	SetPendingToolQueue{},
+	ClearPendingTool{},
+	ClearPendingEffects{},
+	ClearPendingToolQueue{},
+	ResetContext{},
+}
+
 type AppendUserMessage struct {
 	Content string
 }

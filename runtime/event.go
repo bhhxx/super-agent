@@ -5,6 +5,19 @@ type Event interface {
 	isEvent()
 }
 
+// AllEvents lists every Event type for registration, serialization, and testing.
+var AllEvents = []Event{
+	UserMessageSubmitted{},
+	AssistantMessageReceived{},
+	ToolCallsRequested{},
+	ToolResultReceived{},
+	ApprovalGranted{},
+	ApprovalDenied{},
+	ErrorOccurred{},
+	CancelRequested{},
+	ResetRequested{},
+}
+
 type UserMessageSubmitted struct {
 	Content string
 }
