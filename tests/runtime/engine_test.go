@@ -307,7 +307,8 @@ func TestCancelClearsPendingToolAndEffects(t *testing.T) {
 func waitForApproval(t *testing.T, events <-chan SessionEvent, approvals chan<- ConfirmationAction, check func()) {
 	t.Helper()
 	for ev := range events {
-		if ev.State == StateWaitingApproval && ev.ToolCall != nil {
+		stateChanged, ok := ev.(StateChanged)
+		if ok && stateChanged.State == StateWaitingApproval && stateChanged.ToolCall != nil {
 			if check != nil {
 				check()
 			}
@@ -354,11 +355,13 @@ func TestSessionRunEmitsStateAndFinalMessage(t *testing.T) {
 	var states []State
 	var final *Message
 	for ev := range events {
-		if ev.State != "" {
+		switch ev := ev.(type) {
+		case StateChanged:
 			states = append(states, ev.State)
-		}
-		if ev.Message != nil && ev.Message.Role == RoleAssistant {
-			final = ev.Message
+		case MessageAppended:
+			if ev.Message.Role == RoleAssistant {
+				final = &ev.Message
+			}
 		}
 	}
 
@@ -389,7 +392,8 @@ func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 
 	var sawApproval bool
 	for ev := range events {
-		if ev.State == StateWaitingApproval && ev.ToolCall != nil {
+		stateChanged, ok := ev.(StateChanged)
+		if ok && stateChanged.State == StateWaitingApproval && stateChanged.ToolCall != nil {
 			sawApproval = true
 			approvals <- ConfirmOnce
 		}

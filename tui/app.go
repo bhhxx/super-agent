@@ -492,12 +492,14 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case sessionEventMsg:
-		if msg.event.Error != nil && !errors.Is(msg.event.Error, context.Canceled) {
-			a.err = msg.event.Error.Error()
-		}
-		if msg.event.Chunk != nil {
-			a.streamContent += msg.event.Chunk.ContentDelta
-			a.streamReasoning += msg.event.Chunk.ReasoningContentDelta
+		switch event := msg.event.(type) {
+		case runtime.SessionError:
+			if !errors.Is(event.Err, context.Canceled) {
+				a.err = event.Err.Error()
+			}
+		case runtime.StreamChunkReceived:
+			a.streamContent += event.Chunk.ContentDelta
+			a.streamReasoning += event.Chunk.ReasoningContentDelta
 		}
 		a.viewport.SetContent(a.contentString())
 		if a.viewport.AtBottom() {

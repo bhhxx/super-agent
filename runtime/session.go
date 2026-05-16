@@ -13,13 +13,34 @@ const (
 	ConfirmDeny   ConfirmationAction = "deny"
 )
 
-type SessionEvent struct {
-	State    State
-	Chunk    *StreamChunk
-	Message  *Message
-	ToolCall *ToolCall
-	Error    error
+type SessionEvent interface {
+	isSessionEvent()
 }
+
+type StateChanged struct {
+	State    State
+	ToolCall *ToolCall
+}
+
+func (StateChanged) isSessionEvent() {}
+
+type StreamChunkReceived struct {
+	Chunk StreamChunk
+}
+
+func (StreamChunkReceived) isSessionEvent() {}
+
+type MessageAppended struct {
+	Message Message
+}
+
+func (MessageAppended) isSessionEvent() {}
+
+type SessionError struct {
+	Err error
+}
+
+func (SessionError) isSessionEvent() {}
 
 type Snapshot struct {
 	State       State
@@ -63,22 +84,22 @@ func (s *Session) Snapshot() Snapshot {
 
 func (s *Session) emitSnapshot(events chan<- SessionEvent) {
 	snapshot := s.Snapshot()
-	events <- SessionEvent{State: snapshot.State, ToolCall: snapshot.PendingTool}
+	events <- StateChanged{State: snapshot.State, ToolCall: snapshot.PendingTool}
 	messages := snapshot.Messages
 	if len(messages) > 0 {
 		msg := messages[len(messages)-1]
-		events <- SessionEvent{Message: &msg}
+		events <- MessageAppended{Message: msg}
 	}
 }
 
 func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, approvals <-chan ConfirmationAction, query string) error {
 	chunkFunc := func(chunk StreamChunk) {
-		events <- SessionEvent{Chunk: &chunk}
+		events <- StreamChunkReceived{Chunk: chunk}
 	}
 	if err := s.engine.runEventWithBeforeEffects(ctx, UserMessageSubmitted{Content: query}, chunkFunc, func() {
 		s.emitSnapshot(events)
 	}); err != nil {
-		events <- SessionEvent{Error: err}
+		events <- SessionError{Err: err}
 		return err
 	}
 	s.emitSnapshot(events)
@@ -88,11 +109,11 @@ func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, appr
 			s.emitSnapshot(events)
 			action, err := waitApproval(ctx, approvals)
 			if err != nil {
-				events <- SessionEvent{Error: err}
+				events <- SessionError{Err: err}
 				return err
 			}
 			if err := s.applyApproval(ctx, action, chunkFunc); err != nil {
-				events <- SessionEvent{Error: err}
+				events <- SessionError{Err: err}
 				return err
 			}
 			s.emitSnapshot(events)
