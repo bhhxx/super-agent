@@ -40,10 +40,8 @@ type ToolCallsRequested struct {
 func (ToolCallsRequested) isEvent() {}
 
 type ToolResultReceived struct {
-	Call              ToolCall
-	Result            string
-	NextCall          *ToolCall
-	NextNeedsApproval bool
+	Call   ToolCall
+	Result string
 }
 
 func (ToolResultReceived) isEvent() {}
@@ -55,9 +53,7 @@ type ApprovalGranted struct {
 func (ApprovalGranted) isEvent() {}
 
 type ApprovalDenied struct {
-	Call              ToolCall
-	NextCall          *ToolCall
-	NextNeedsApproval bool
+	Call ToolCall
 }
 
 func (ApprovalDenied) isEvent() {}

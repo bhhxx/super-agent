@@ -6,10 +6,9 @@ import (
 )
 
 type EffectContext struct {
-	Messages       []Message
-	ToolSpecs      []ToolSpec
-	NeedsApproval  func(ToolCall) bool
-	NextQueuedTool func() (*ToolCall, bool)
+	Messages      []Message
+	ToolSpecs     []ToolSpec
+	NeedsApproval func(ToolCall) bool
 }
 
 type EffectExecutor interface {
@@ -36,7 +35,7 @@ func (x *DefaultEffectExecutor) Execute(ctx context.Context, effect Effect, env 
 		if err != nil {
 			return nil, err
 		}
-		calls := responseToolCalls(resp)
+		calls := markRiskyToolCalls(responseToolCalls(resp), env.ToolSpecs)
 		if len(calls) > 0 {
 			return ToolCallsRequested{
 				FinalAnswer:      resp.FinalAnswer,
@@ -49,23 +48,34 @@ func (x *DefaultEffectExecutor) Execute(ctx context.Context, effect Effect, env 
 	case RunTool:
 		result, err := x.tools.Run(ctx, fx.Call)
 		if err != nil {
-			return nil, err
+			if errors.Is(err, context.Canceled) {
+				return nil, err
+			}
+			return ToolResultReceived{Call: fx.Call, Result: "Error: " + err.Error()}, nil
 		}
-		next, ok := nextQueuedTool(env)
-		return ToolResultReceived{
-			Call:              fx.Call,
-			Result:            result,
-			NextCall:          next,
-			NextNeedsApproval: ok && env.NeedsApproval != nil && env.NeedsApproval(*next),
-		}, nil
+		return ToolResultReceived{Call: fx.Call, Result: result}, nil
 	default:
 		return nil, errors.New("unknown effect")
 	}
 }
 
-func nextQueuedTool(env EffectContext) (*ToolCall, bool) {
-	if env.NextQueuedTool == nil {
-		return nil, false
+func responseToolCalls(resp ModelResponse) []ToolCall {
+	if len(resp.ToolCalls) > 0 {
+		return append([]ToolCall(nil), resp.ToolCalls...)
 	}
-	return env.NextQueuedTool()
+	return nil
+}
+
+func markRiskyToolCalls(calls []ToolCall, specs []ToolSpec) []ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	risky := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		risky[spec.Name] = spec.Risky
+	}
+	for i := range calls {
+		calls[i].Risky = risky[calls[i].Name]
+	}
+	return calls
 }

@@ -91,7 +91,6 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 					ID:    currentToolUseID,
 					Name:  currentToolUseName,
 					Input: currentToolUseInput,
-					Risky: isRiskyTool(currentToolUseName, tools),
 				})
 				currentToolUseID = ""
 				currentToolUseName = ""

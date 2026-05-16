@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	. "super-agent/runtime"
@@ -21,6 +22,7 @@ func (m *scriptedModel) Next(_ context.Context, messages []Message, _ []ToolSpec
 
 type fakeTool struct {
 	results map[string]string
+	specs   []ToolSpec
 	calls   []ToolCall
 }
 
@@ -30,7 +32,7 @@ func (t *fakeTool) Run(_ context.Context, call ToolCall) (string, error) {
 }
 
 func (t *fakeTool) Specs() []ToolSpec {
-	return nil
+	return t.specs
 }
 
 func runSession(t *testing.T, engine *Engine, content string) {
@@ -159,6 +161,51 @@ func TestMultipleToolCallsFeedAllResultsBackToModel(t *testing.T) {
 	}
 }
 
+func TestQueuedRiskyToolWaitsForApproval(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{
+			{ID: "call-1", Name: "first"},
+			{ID: "call-2", Name: "second"},
+		}},
+		{FinalAnswer: "done"},
+	}}
+	tools := &fakeTool{
+		results: map[string]string{"first": "one", "second": "two"},
+		specs:   []ToolSpec{{Name: "first"}, {Name: "second", Risky: true}},
+	}
+	engine := NewEngine(model, tools, nil)
+	engine.Ready()
+
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ConfirmationAction, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Run(context.Background(), "use tools", events, approvals)
+	}()
+
+	waitForApproval(t, events, approvals, func() {
+		if len(tools.calls) != 1 || tools.calls[0].Name != "first" {
+			t.Fatalf("tool calls before approval = %+v, want first only", tools.calls)
+		}
+		call, ok := engine.PendingTool()
+		if !ok {
+			t.Fatal("pending tool not found")
+		}
+		if call.Name != "second" {
+			t.Fatalf("pending tool = %+v, want second", call)
+		}
+	})
+
+	approvals <- ConfirmOnce
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if len(tools.calls) != 2 || tools.calls[1].Name != "second" {
+		t.Fatalf("tool calls after approval = %+v, want first then second", tools.calls)
+	}
+}
+
 func TestToolCallAssistantContentIsPreserved(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
 		{
@@ -181,10 +228,13 @@ func TestToolCallAssistantContentIsPreserved(t *testing.T) {
 
 func TestRiskyToolWaitsForShortcutApproval(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /", Risky: true}}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /"}}},
 		{FinalAnswer: "approved"},
 	}}
-	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
 	engine := NewEngine(model, tools, nil)
 	engine.Ready()
 
@@ -222,6 +272,37 @@ func TestRiskyToolWaitsForShortcutApproval(t *testing.T) {
 	}
 	if engine.State() != StateIdle {
 		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
+	}
+}
+
+func TestToolRiskComesFromToolSpec(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+		{FinalAnswer: "approved"},
+	}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
+	engine := NewEngine(model, tools, nil)
+	engine.Ready()
+
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ConfirmationAction, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.Run(context.Background(), "danger", events, approvals)
+	}()
+
+	waitForApproval(t, events, approvals, func() {
+		if len(tools.calls) != 0 {
+			t.Fatalf("tool ran before approval: %+v", tools.calls)
+		}
+	})
+	approvals <- ConfirmOnce
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
 	}
 }
 
@@ -274,6 +355,32 @@ func TestApprovalGrantedRunsPendingLocalTool(t *testing.T) {
 	}
 }
 
+func TestToolResultAdvancesQueueThroughEngine(t *testing.T) {
+	call := ToolCall{ID: "call-1", Name: "bash", Input: "pwd"}
+	decision, err := Transition(StateRunningTool, ToolResultReceived{Call: call, Result: "ok"})
+	if err != nil {
+		t.Fatalf("Transition failed: %v", err)
+	}
+	if decision.NextState != StateAdvancingQueue {
+		t.Fatalf("next state = %s, want %s", decision.NextState, StateAdvancingQueue)
+	}
+	if len(decision.Effects) != 0 {
+		t.Fatalf("effects = %+v, want none", decision.Effects)
+	}
+}
+
+func TestAllEventsDoesNotExposeQueueContinuationEvents(t *testing.T) {
+	seen := map[string]bool{}
+	for _, event := range AllEvents {
+		seen[reflect.TypeOf(event).Name()] = true
+	}
+	for _, name := range []string{"QueueItemReady", "QueueExhausted"} {
+		if seen[name] {
+			t.Fatalf("AllEvents exposes internal queue event %s: %+v", name, AllEvents)
+		}
+	}
+}
+
 func TestCancelRequestedReturnsRuntimeToIdle(t *testing.T) {
 	decision, err := Transition(StateWaitingLLM, CancelRequested{})
 	if err != nil {
@@ -289,9 +396,9 @@ func TestCancelRequestedReturnsRuntimeToIdle(t *testing.T) {
 
 func TestCancelClearsPendingToolAndEffects(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /", Risky: true}}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /"}}},
 	}}
-	engine := NewEngine(model, &fakeTool{}, nil)
+	engine := NewEngine(model, &fakeTool{specs: []ToolSpec{{Name: "bash", Risky: true}}}, nil)
 	engine.Ready()
 
 	session := NewSession(engine)
@@ -426,10 +533,13 @@ func TestSessionRunEmitsEachAppendedMessageOnce(t *testing.T) {
 
 func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok", Risky: true}}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
 		{FinalAnswer: "done"},
 	}}
-	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
 	engine := NewEngine(model, tools, nil)
 	engine.Ready()
 	session := NewSession(engine)
@@ -462,12 +572,15 @@ func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 
 func TestApproveAlwaysIsScopedToInput(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCalls: []ToolCall{{Name: "bash", Input: "ls", Risky: true}}},
-		{ToolCalls: []ToolCall{{Name: "bash", Input: "ls", Risky: true}}},
-		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /", Risky: true}}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "ls"}}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "ls"}}},
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /"}}},
 		{FinalAnswer: "done"},
 	}}
-	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
 	engine := NewEngine(model, tools, nil)
 	engine.Ready()
 	session := NewSession(engine)

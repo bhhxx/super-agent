@@ -101,7 +101,6 @@ func (m *OpenAIModel) Next(ctx context.Context, messages []runtime.Message, tool
 				ID:    call.ID,
 				Name:  call.Function.Name,
 				Input: call.Function.Arguments,
-				Risky: isRiskyTool(call.Function.Name, tools),
 			})
 		}
 		return runtime.ModelResponse{
@@ -114,15 +113,6 @@ func (m *OpenAIModel) Next(ctx context.Context, messages []runtime.Message, tool
 		FinalAnswer:      message.Content,
 		ReasoningContent: finalRC,
 	}, nil
-}
-
-func isRiskyTool(name string, tools []runtime.ToolSpec) bool {
-	for _, tool := range tools {
-		if tool.Name == name {
-			return tool.Risky
-		}
-	}
-	return false
 }
 
 func toOpenAITools(tools []runtime.ToolSpec) []openai.ChatCompletionToolUnionParam {

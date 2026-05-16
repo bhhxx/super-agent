@@ -123,8 +123,7 @@ func (e *Engine) Deny(ctx context.Context, chunkFunc func(StreamChunk)) error {
 		return errors.New("no tool is waiting for approval")
 	}
 	call := *e.pendingTool
-	next, ok := e.nextQueuedToolLocked()
-	err := e.dispatchLocked(ApprovalDenied{Call: call, NextCall: next, NextNeedsApproval: ok && e.needsApprovalLocked(*next)})
+	err := e.dispatchLocked(ApprovalDenied{Call: call})
 	e.mu.Unlock()
 	if err != nil {
 		return err
@@ -138,13 +137,6 @@ func (e *Engine) Cancel() error {
 
 func (e *Engine) Reset() {
 	_ = e.dispatch(ResetRequested{})
-}
-
-func (e *Engine) runEvent(ctx context.Context, event Event, chunkFunc func(StreamChunk)) error {
-	if err := e.dispatch(event); err != nil {
-		return err
-	}
-	return e.runPendingEffects(ctx, chunkFunc)
 }
 
 func (e *Engine) runEventWithBeforeEffects(ctx context.Context, event Event, chunkFunc func(StreamChunk), beforeEffects func()) error {
@@ -167,11 +159,32 @@ func (e *Engine) dispatchLocked(event Event) error {
 		return err
 	}
 	e.state = decision.NextState
-	for _, mutation := range decision.Mutations {
-		e.applyMutation(mutation)
+	for _, m := range decision.Mutations {
+		e.applyMutation(m)
 	}
 	e.pendingEffects = append(e.pendingEffects, decision.Effects...)
+	e.advanceQueueLocked()
 	return nil
+}
+
+func (e *Engine) advanceQueueLocked() {
+	if e.state != StateAdvancingQueue {
+		return
+	}
+	if len(e.pendingToolQueue) == 0 {
+		e.state = StateWaitingLLM
+		e.pendingEffects = append(e.pendingEffects, CallModel{})
+		return
+	}
+	call := e.pendingToolQueue[0]
+	e.pendingToolQueue = e.pendingToolQueue[1:]
+	if e.needsApprovalLocked(call) {
+		e.pendingTool = &call
+		e.state = StateWaitingApproval
+		return
+	}
+	e.state = StateRunningTool
+	e.pendingEffects = append(e.pendingEffects, RunTool{Call: call})
 }
 
 func (e *Engine) applyMutation(mutation Mutation) {
@@ -224,10 +237,9 @@ func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChu
 
 func (e *Engine) runEffect(ctx context.Context, effect Effect, chunkFunc func(StreamChunk)) error {
 	event, err := e.executor.Execute(ctx, effect, EffectContext{
-		Messages:       e.Messages(),
-		ToolSpecs:      e.toolSpecs(),
-		NeedsApproval:  e.needsApproval,
-		NextQueuedTool: e.nextQueuedTool,
+		Messages:      e.Messages(),
+		ToolSpecs:     e.toolSpecs(),
+		NeedsApproval: e.needsApproval,
 	}, chunkFunc)
 	if err != nil {
 		return err
@@ -243,28 +255,6 @@ func (e *Engine) needsApproval(call ToolCall) bool {
 
 func (e *Engine) needsApprovalLocked(call ToolCall) bool {
 	return call.Risky && !e.alwaysAllow[toolCallKey(call)] && !e.YOLOMode
-}
-
-func (e *Engine) nextQueuedTool() (*ToolCall, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.nextQueuedToolLocked()
-}
-
-func (e *Engine) nextQueuedToolLocked() (*ToolCall, bool) {
-	if len(e.pendingToolQueue) == 0 {
-		return nil, false
-	}
-	call := e.pendingToolQueue[0]
-	e.pendingToolQueue = e.pendingToolQueue[1:]
-	return &call, true
-}
-
-func responseToolCalls(resp ModelResponse) []ToolCall {
-	if len(resp.ToolCalls) > 0 {
-		return append([]ToolCall(nil), resp.ToolCalls...)
-	}
-	return nil
 }
 
 func (e *Engine) toolSpecs() []ToolSpec {
