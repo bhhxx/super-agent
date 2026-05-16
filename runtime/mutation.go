@@ -29,6 +29,12 @@ type SetPendingTool struct {
 
 func (SetPendingTool) isMutation() {}
 
+type SetPendingToolQueue struct {
+	Calls []ToolCall
+}
+
+func (SetPendingToolQueue) isMutation() {}
+
 type ClearPendingTool struct{}
 
 func (ClearPendingTool) isMutation() {}
@@ -36,6 +42,10 @@ func (ClearPendingTool) isMutation() {}
 type ClearPendingEffects struct{}
 
 func (ClearPendingEffects) isMutation() {}
+
+type ClearPendingToolQueue struct{}
+
+func (ClearPendingToolQueue) isMutation() {}
 
 type ResetContext struct{}
 

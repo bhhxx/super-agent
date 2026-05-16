@@ -33,7 +33,8 @@ func main() {
 	}
 
 	engine.Ready()
-	if _, err := tea.NewProgram(tui.New(engine), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
+	session := runtime.NewSession(engine)
+	if _, err := tea.NewProgram(tui.New(session), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

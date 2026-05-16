@@ -126,3 +126,28 @@ func TestOpenAIModelMarksRiskyToolCalls(t *testing.T) {
 		t.Fatalf("ToolCall = %+v", resp.ToolCall)
 	}
 }
+
+func TestOpenAIModelReturnsAllToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"first\",\"arguments\":\"{}\"}},{\"index\":1,\"id\":\"call_2\",\"type\":\"function\",\"function\":{\"name\":\"second\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	model := NewOpenAIModel(Config{BaseURL: server.URL, APIKey: "test-key", Model: "test-model"})
+	resp, err := model.Next(context.Background(), []runtime.Message{
+		{Role: runtime.RoleUser, Content: "use tools"},
+	}, []runtime.ToolSpec{{Name: "first"}, {Name: "second", Risky: true}}, nil)
+	if err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if len(resp.ToolCalls) != 2 {
+		t.Fatalf("ToolCalls = %+v, want two", resp.ToolCalls)
+	}
+	if resp.ToolCalls[0].Name != "first" || resp.ToolCalls[1].Name != "second" {
+		t.Fatalf("ToolCalls = %+v, want first then second", resp.ToolCalls)
+	}
+	if !resp.ToolCalls[1].Risky {
+		t.Fatalf("second call was not marked risky: %+v", resp.ToolCalls[1])
+	}
+}

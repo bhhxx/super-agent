@@ -92,15 +92,19 @@ func (m *OpenAIModel) Next(ctx context.Context, messages []runtime.Message, tool
 	}
 
 	if len(message.ToolCalls) > 0 {
-		call := message.ToolCalls[0]
-		return runtime.ModelResponse{
-			ReasoningContent: finalRC,
-			ToolCall: &runtime.ToolCall{
+		calls := make([]runtime.ToolCall, 0, len(message.ToolCalls))
+		for _, call := range message.ToolCalls {
+			calls = append(calls, runtime.ToolCall{
 				ID:    call.ID,
 				Name:  call.Function.Name,
 				Input: call.Function.Arguments,
 				Risky: isRiskyTool(call.Function.Name, tools),
-			},
+			})
+		}
+		return runtime.ModelResponse{
+			ReasoningContent: finalRC,
+			ToolCalls:        calls,
+			ToolCall:         &calls[0],
 		}, nil
 	}
 	return runtime.ModelResponse{
