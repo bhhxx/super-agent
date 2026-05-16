@@ -16,7 +16,16 @@ var AllEvents = []Event{
 	ErrorOccurred{},
 	CancelRequested{},
 	ResetRequested{},
+	QueueAdvanceRequested{},
 }
+
+type QueueAdvanceRequested struct {
+	QueueLength   int
+	NextCall      *ToolCall
+	NeedsApproval bool
+}
+
+func (QueueAdvanceRequested) isEvent() {}
 
 type UserMessageSubmitted struct {
 	Content string

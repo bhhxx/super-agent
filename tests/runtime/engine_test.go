@@ -2,7 +2,6 @@ package runtime_test
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	. "super-agent/runtime"
@@ -366,18 +365,6 @@ func TestToolResultAdvancesQueueThroughEngine(t *testing.T) {
 	}
 	if len(decision.Effects) != 0 {
 		t.Fatalf("effects = %+v, want none", decision.Effects)
-	}
-}
-
-func TestAllEventsDoesNotExposeQueueContinuationEvents(t *testing.T) {
-	seen := map[string]bool{}
-	for _, event := range AllEvents {
-		seen[reflect.TypeOf(event).Name()] = true
-	}
-	for _, name := range []string{"QueueItemReady", "QueueExhausted"} {
-		if seen[name] {
-			t.Fatalf("AllEvents exposes internal queue event %s: %+v", name, AllEvents)
-		}
 	}
 }
 

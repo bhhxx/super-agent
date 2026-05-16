@@ -89,6 +89,31 @@ func Transition(state State, event Event) (Decision, error) {
 				AppendToolResult{Call: ev.Call, Result: ev.Result},
 			},
 		}, nil
+	case QueueAdvanceRequested:
+		if state != StateAdvancingQueue {
+			return Decision{}, errors.New("invalid state for advancing queue")
+		}
+		if ev.QueueLength == 0 {
+			return Decision{
+				NextState: StateWaitingLLM,
+				Effects:   []Effect{CallModel{}},
+			}, nil
+		}
+		call := *ev.NextCall
+		if ev.NeedsApproval {
+			return Decision{
+				NextState: StateWaitingApproval,
+				Mutations: []Mutation{
+					SetPendingTool{Call: call},
+					PopPendingToolQueue{},
+				},
+			}, nil
+		}
+		return Decision{
+			NextState: StateRunningTool,
+			Mutations: []Mutation{PopPendingToolQueue{}},
+			Effects:   []Effect{RunTool{Call: call}},
+		}, nil
 	case ErrorOccurred:
 		return Decision{
 			NextState: StateIdle,

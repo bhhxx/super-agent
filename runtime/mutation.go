@@ -14,8 +14,13 @@ var AllMutations = []Mutation{
 	ClearPendingTool{},
 	ClearPendingEffects{},
 	ClearPendingToolQueue{},
+	PopPendingToolQueue{},
 	ResetContext{},
 }
+
+type PopPendingToolQueue struct{}
+
+func (PopPendingToolQueue) isMutation() {}
 
 type AppendUserMessage struct {
 	Content string

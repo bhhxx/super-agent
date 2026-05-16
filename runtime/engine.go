@@ -163,28 +163,25 @@ func (e *Engine) dispatchLocked(event Event) error {
 		e.applyMutation(m)
 	}
 	e.pendingEffects = append(e.pendingEffects, decision.Effects...)
-	e.advanceQueueLocked()
-	return nil
+	return e.advanceQueueLocked()
 }
 
-func (e *Engine) advanceQueueLocked() {
+func (e *Engine) advanceQueueLocked() error {
 	if e.state != StateAdvancingQueue {
-		return
+		return nil
 	}
-	if len(e.pendingToolQueue) == 0 {
-		e.state = StateWaitingLLM
-		e.pendingEffects = append(e.pendingEffects, CallModel{})
-		return
+
+	event := QueueAdvanceRequested{
+		QueueLength: len(e.pendingToolQueue),
 	}
-	call := e.pendingToolQueue[0]
-	e.pendingToolQueue = e.pendingToolQueue[1:]
-	if e.needsApprovalLocked(call) {
-		e.pendingTool = &call
-		e.state = StateWaitingApproval
-		return
+	if event.QueueLength > 0 {
+		call := e.pendingToolQueue[0]
+		event.NextCall = &call
+		event.NeedsApproval = e.needsApprovalLocked(call)
 	}
-	e.state = StateRunningTool
-	e.pendingEffects = append(e.pendingEffects, RunTool{Call: call})
+
+	// 把控制权交还给正规流程
+	return e.dispatchLocked(event)
 }
 
 func (e *Engine) applyMutation(mutation Mutation) {
@@ -200,6 +197,10 @@ func (e *Engine) applyMutation(mutation Mutation) {
 		e.pendingTool = &call
 	case SetPendingToolQueue:
 		e.pendingToolQueue = append([]ToolCall(nil), m.Calls...)
+	case PopPendingToolQueue:
+		if len(e.pendingToolQueue) > 0 {
+			e.pendingToolQueue = e.pendingToolQueue[1:]
+		}
 	case ClearPendingTool:
 		e.pendingTool = nil
 	case ClearPendingToolQueue:
