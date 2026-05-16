@@ -8,9 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/joho/godotenv"
 
-	"super-agent/llm"
-	"super-agent/runtime"
-	"super-agent/tools"
+	"super-agent/app"
 	"super-agent/tui"
 )
 
@@ -21,19 +19,14 @@ func main() {
 
 	_ = godotenv.Load()
 
-	model := llm.NewModel()
-	toolRunner := runtime.ToolRunner(tools.NewBashTools())
-	if *noToolsFlag || os.Getenv("NO_TOOLS") == "true" {
-		toolRunner = tools.NoTools{}
+	session, err := app.NewSession(app.LoadConfig(app.Flags{
+		YOLO:    *yoloFlag,
+		NoTools: *noToolsFlag,
+	}, os.LookupEnv))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
-	engine := runtime.NewEngine(model, toolRunner, nil)
-
-	if *yoloFlag || os.Getenv("YOLO") == "true" {
-		engine.EnableYOLO()
-	}
-
-	engine.Ready()
-	session := runtime.NewSession(engine)
 	if _, err := tea.NewProgram(tui.New(session), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

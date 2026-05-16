@@ -1,7 +1,7 @@
 package llm
 
 import (
-	"os"
+	"errors"
 	"super-agent/runtime"
 )
 
@@ -11,14 +11,14 @@ type Config struct {
 	Model   string
 }
 
-func NewModel() runtime.Model {
-	provider := os.Getenv("LLM_PROVIDER")
+func NewModel(provider string) (runtime.Model, error) {
 	switch provider {
 	case "openai":
-		return NewOpenAI()
+		return NewOpenAI(), nil
 	case "claude":
-		return NewClaude()
-	default:
-		return NewDeepSeek()
+		return NewClaude(), nil
+	case "", "deepseek":
+		return NewDeepSeek(), nil
 	}
+	return nil, errors.New("unknown llm provider: " + provider)
 }
