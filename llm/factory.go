@@ -11,14 +11,39 @@ type Config struct {
 	Model   string
 }
 
-func NewModel(provider string) (runtime.Model, error) {
-	switch provider {
-	case "openai":
-		return NewOpenAI(), nil
-	case "claude":
-		return NewClaude(), nil
-	case "", "deepseek":
-		return NewDeepSeek(), nil
+type ModelFactory func() runtime.Model
+
+type ModelRegistry struct {
+	factories map[string]ModelFactory
+}
+
+func NewModelRegistry() *ModelRegistry {
+	return &ModelRegistry{factories: make(map[string]ModelFactory)}
+}
+
+func (r *ModelRegistry) Register(provider string, factory ModelFactory) {
+	r.factories[provider] = factory
+}
+
+func (r *ModelRegistry) New(provider string) (runtime.Model, error) {
+	if provider == "" {
+		provider = "deepseek"
 	}
-	return nil, errors.New("unknown llm provider: " + provider)
+	factory, ok := r.factories[provider]
+	if !ok {
+		return nil, errors.New("unknown llm provider: " + provider)
+	}
+	return factory(), nil
+}
+
+func NewDefaultModelRegistry() *ModelRegistry {
+	registry := NewModelRegistry()
+	registry.Register("deepseek", func() runtime.Model { return NewDeepSeek() })
+	registry.Register("openai", func() runtime.Model { return NewOpenAI() })
+	registry.Register("claude", func() runtime.Model { return NewClaude() })
+	return registry
+}
+
+func NewModel(provider string) (runtime.Model, error) {
+	return NewDefaultModelRegistry().New(provider)
 }
