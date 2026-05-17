@@ -14,7 +14,7 @@ type RunController interface {
 	StartNewGeneration()
 	CancelRun()
 	CurrentRunID() RunID
-	CurrentContext(fallback context.Context) context.Context
+	CurrentContext() (context.Context, bool)
 	IsCurrent(runID RunID) bool
 }
 
@@ -64,13 +64,13 @@ func (c *DefaultRunController) CurrentRunID() RunID {
 	return c.runID
 }
 
-func (c *DefaultRunController) CurrentContext(fallback context.Context) context.Context {
+func (c *DefaultRunController) CurrentContext() (context.Context, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.ctx == nil {
-		return fallback
+		return nil, false
 	}
-	return c.ctx
+	return c.ctx, true
 }
 
 func (c *DefaultRunController) IsCurrent(runID RunID) bool {

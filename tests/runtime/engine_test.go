@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -903,5 +904,156 @@ func TestNoToolsToolCallIsProtocolError(t *testing.T) {
 	}
 	if len(approvals) != 0 {
 		t.Fatal("approval requested for disabled tools")
+	}
+}
+
+func TestInvalidSecondTurnDoesNotCancelActiveRun(t *testing.T) {
+	model := newBlockingModel()
+	engine := NewEngine(model, &fakeTool{}, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	first := NewSession(engine)
+	firstEvents := make(chan SessionEvent, 20)
+	firstApprovals := make(chan ApprovalDecision, 1)
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- first.RunTurn(context.Background(), "first", firstEvents, firstApprovals)
+	}()
+	<-model.started
+
+	second := NewSession(engine)
+	secondEvents := make(chan SessionEvent, 20)
+	secondApprovals := make(chan ApprovalDecision, 1)
+	if err := second.RunTurn(context.Background(), "second", secondEvents, secondApprovals); err == nil {
+		t.Fatal("second RunTurn succeeded while first run was active")
+	}
+
+	close(model.release)
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatalf("first RunTurn failed after invalid second turn: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first RunTurn did not return")
+	}
+	for range firstEvents {
+	}
+	messages := engine.Messages()
+	if len(messages) != 2 || messages[1].Role != RoleAssistant || messages[1].Content != "stale" {
+		t.Fatalf("messages = %+v, want first run assistant result preserved", messages)
+	}
+}
+
+type blockingSpecsRunner struct {
+	specCalls chan struct{}
+	block     chan struct{}
+	mu        sync.Mutex
+	specCount int
+	modelRuns int
+}
+
+func newBlockingSpecsRunner() *blockingSpecsRunner {
+	return &blockingSpecsRunner{
+		specCalls: make(chan struct{}, 2),
+		block:     make(chan struct{}),
+	}
+}
+
+func (r *blockingSpecsRunner) Run(_ context.Context, effect QueuedEffect, _ ExecutionInput, _ func(StreamChunk)) (EffectOutcome, error) {
+	outcome := EffectOutcome{RunID: effect.RunID, EffectID: effect.EffectID}
+	switch eff := effect.Effect.(type) {
+	case CallModel:
+		r.modelRuns++
+		if r.modelRuns == 1 {
+			outcome.Result = ModelReplied{Response: ModelResponse{
+				ToolCalls: []ToolCall{{ID: "call-1", Name: "bash", Input: "pwd"}},
+			}}
+		} else {
+			outcome.Result = ModelReplied{Response: ModelResponse{Content: "done"}}
+		}
+	case RunTool:
+		outcome.Result = ToolFinished{Call: eff.Call, Result: "ok"}
+	case ProcessNextToolCall:
+		outcome.Result = ToolQueueChecked{}
+	default:
+		outcome.Result = ModelReplied{Response: ModelResponse{Content: "done"}}
+	}
+	return outcome, nil
+}
+
+func (r *blockingSpecsRunner) ToolSpecs() []ToolSpec {
+	r.mu.Lock()
+	r.specCount++
+	count := r.specCount
+	if count <= 2 {
+		r.specCalls <- struct{}{}
+	}
+	r.mu.Unlock()
+	if count == 2 {
+		<-r.block
+	}
+	return []ToolSpec{{Name: "bash"}}
+}
+
+func TestClassifierToolSpecsAreFetchedWithoutHoldingEngineLock(t *testing.T) {
+	runner := newBlockingSpecsRunner()
+	store := NewMemoryApprovalStore()
+	engine := NewEngineWithComponents(
+		runner,
+		DefaultResultResolver{},
+		NewDefaultEventClassifier(NewDefaultPolicy(), store),
+		DefaultReducer{},
+		NewDefaultRunController(),
+		store,
+		nil,
+	)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.RunTurn(context.Background(), "hi", events, approvals)
+	}()
+	<-runner.specCalls
+	<-runner.specCalls
+
+	stateDone := make(chan State, 1)
+	go func() {
+		stateDone <- engine.State()
+	}()
+	select {
+	case <-stateDone:
+	case <-time.After(200 * time.Millisecond):
+		close(runner.block)
+		t.Fatal("State blocked while classifier fetched tool specs")
+	}
+	close(runner.block)
+	if err := <-done; err != nil {
+		t.Fatalf("RunTurn failed: %v", err)
+	}
+	for range events {
+	}
+}
+
+func TestRunControllerCurrentContextReportsMissingContext(t *testing.T) {
+	controller := NewDefaultRunController()
+	if _, ok := controller.CurrentContext(); ok {
+		t.Fatal("CurrentContext returned ok before a run started")
+	}
+
+	_, ctx := controller.StartRun(context.Background())
+	got, ok := controller.CurrentContext()
+	if !ok || got != ctx {
+		t.Fatalf("CurrentContext = (%v, %v), want current context", got, ok)
+	}
+
+	controller.CancelRun()
+	if _, ok := controller.CurrentContext(); ok {
+		t.Fatal("CurrentContext returned ok after cancellation")
 	}
 }

@@ -15,12 +15,10 @@ type Policy interface {
 	ClassifyToolCall(call ToolCall, input ToolPolicyInput) ToolDecision
 }
 
-type DefaultPolicy struct {
-	approvals ApprovalStore
-}
+type DefaultPolicy struct{}
 
-func NewDefaultPolicy(approvals ApprovalStore) *DefaultPolicy {
-	return &DefaultPolicy{approvals: approvals}
+func NewDefaultPolicy() *DefaultPolicy {
+	return &DefaultPolicy{}
 }
 
 func (p *DefaultPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput) ToolDecision {
@@ -31,11 +29,7 @@ func (p *DefaultPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput) T
 }
 
 func (p *DefaultPolicy) needsApproval(call ToolCall, specs []ToolSpec) bool {
-	risky := isRiskyTool(call.Name, specs)
-	if !risky {
-		return false
-	}
-	return !p.approvals.AutoApproveTools() && !p.approvals.IsAlwaysAllowed(NewApprovalKey(call))
+	return isRiskyTool(call.Name, specs)
 }
 
 func isRiskyTool(name string, specs []ToolSpec) bool {

@@ -8,7 +8,7 @@ import (
 
 func TestDefaultEventClassifierTurnsRiskyToolIntoApprovalEvent(t *testing.T) {
 	store := NewMemoryApprovalStore()
-	classifier := NewDefaultEventClassifier(NewDefaultPolicy(store), store)
+	classifier := NewDefaultEventClassifier(NewDefaultPolicy(), store)
 	event, err := classifier.Classify(ToolCallsReceived{
 		Calls: []ToolCall{{ID: "call-1", Name: "bash", Input: `{"command":"rm -rf /"}`}},
 	}, EventClassifyInput{
@@ -24,11 +24,23 @@ func TestDefaultEventClassifierTurnsRiskyToolIntoApprovalEvent(t *testing.T) {
 
 func TestDefaultEventClassifierRejectsToolCallsWhenNoToolsAreConfigured(t *testing.T) {
 	store := NewMemoryApprovalStore()
-	classifier := NewDefaultEventClassifier(NewDefaultPolicy(store), store)
+	classifier := NewDefaultEventClassifier(NewDefaultPolicy(), store)
 	_, err := classifier.Classify(ToolCallsReceived{
 		Calls: []ToolCall{{ID: "call-1", Name: "bash", Input: "pwd"}},
 	}, EventClassifyInput{})
 	if err == nil {
 		t.Fatal("Classify succeeded with no tool specs")
+	}
+}
+
+func TestDefaultPolicyDoesNotReadApprovalStore(t *testing.T) {
+	policy := NewDefaultPolicy()
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: "pwd"}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+
+	if decision != DecisionNeedsApproval {
+		t.Fatalf("decision = %v, want needs approval", decision)
 	}
 }

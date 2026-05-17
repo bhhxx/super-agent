@@ -29,7 +29,7 @@ func NewEngineWithExecutor(executor EffectExecutor, initial []Message) *Engine {
 	return NewEngineWithComponents(
 		NewDefaultEffectRunner(executor),
 		DefaultResultResolver{},
-		NewDefaultEventClassifier(NewDefaultPolicy(approvals), approvals),
+		NewDefaultEventClassifier(NewDefaultPolicy(), approvals),
 		DefaultReducer{},
 		NewDefaultRunController(),
 		approvals,
@@ -123,7 +123,11 @@ func (e *Engine) Approve(ctx context.Context, chunkFunc func(StreamChunk)) error
 	if err != nil {
 		return err
 	}
-	return e.runPendingEffects(e.runs.CurrentContext(ctx), chunkFunc)
+	runCtx, ok := e.runs.CurrentContext()
+	if !ok {
+		return errors.New("no active run context")
+	}
+	return e.runPendingEffects(runCtx, chunkFunc)
 }
 
 func (e *Engine) ApproveAlways(ctx context.Context, chunkFunc func(StreamChunk)) error {
@@ -139,7 +143,11 @@ func (e *Engine) ApproveAlways(ctx context.Context, chunkFunc func(StreamChunk))
 	if err != nil {
 		return err
 	}
-	return e.runPendingEffects(e.runs.CurrentContext(ctx), chunkFunc)
+	runCtx, ok := e.runs.CurrentContext()
+	if !ok {
+		return errors.New("no active run context")
+	}
+	return e.runPendingEffects(runCtx, chunkFunc)
 }
 
 func (e *Engine) Deny(ctx context.Context, chunkFunc func(StreamChunk)) error {
@@ -154,7 +162,11 @@ func (e *Engine) Deny(ctx context.Context, chunkFunc func(StreamChunk)) error {
 	if err != nil {
 		return err
 	}
-	return e.runPendingEffects(e.runs.CurrentContext(ctx), chunkFunc)
+	runCtx, ok := e.runs.CurrentContext()
+	if !ok {
+		return errors.New("no active run context")
+	}
+	return e.runPendingEffects(runCtx, chunkFunc)
 }
 
 func (e *Engine) Cancel() error {
@@ -169,10 +181,18 @@ func (e *Engine) Reset() error {
 }
 
 func (e *Engine) dispatchEventThenRunEffects(ctx context.Context, event Event, chunkFunc func(StreamChunk), afterDispatch func()) error {
-	_, runCtx := e.runs.StartRun(ctx)
-	if err := e.dispatch(event); err != nil {
+	e.mu.Lock()
+	decision, err := Transition(e.state.State, event)
+	if err != nil {
+		e.mu.Unlock()
 		return err
 	}
+	_, runCtx := e.runs.StartRun(ctx)
+	if err := e.applyTransitionLocked(decision); err != nil {
+		e.mu.Unlock()
+		return err
+	}
+	e.mu.Unlock()
 	afterDispatch()
 	return e.runPendingEffects(runCtx, chunkFunc)
 }
@@ -188,6 +208,10 @@ func (e *Engine) dispatchLocked(event Event) error {
 	if err != nil {
 		return err
 	}
+	return e.applyTransitionLocked(decision)
+}
+
+func (e *Engine) applyTransitionLocked(decision TransitionResult) error {
 	e.state.State = decision.NextState
 	for _, m := range decision.Mutations {
 		if err := e.reducer.Apply(&e.state, &e.effectQueue, m); err != nil {
@@ -241,12 +265,13 @@ func (e *Engine) executeEffect(ctx context.Context, effect QueuedEffect, chunkFu
 	if !e.runs.IsCurrent(outcome.RunID) {
 		return nil
 	}
+	toolSpecs := e.toolSpecs()
 	e.mu.Lock()
 	event, err := e.resolver.Resolve(outcome.Result, ResultResolveInput{
 		QueuedToolCalls: append([]ToolCall(nil), e.state.QueuedToolCalls...),
 	})
 	if err == nil {
-		event, err = e.classifier.Classify(event, EventClassifyInput{ToolSpecs: e.toolSpecs()})
+		event, err = e.classifier.Classify(event, EventClassifyInput{ToolSpecs: toolSpecs})
 	}
 	if err != nil {
 		dispatchErr := e.dispatchLocked(ErrorOccurred{Err: err})
