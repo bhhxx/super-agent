@@ -120,7 +120,7 @@ type Conversation interface {
 	Snapshot() runtime.Snapshot
 	RunTurn(context.Context, string, chan<- runtime.SessionEvent, <-chan runtime.ApprovalDecision) error
 	Cancel() error
-	Reset()
+	Reset() error
 }
 
 type submitDoneMsg struct {
@@ -672,9 +672,12 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 		cmd := parts[0]
 		switch cmd {
 		case "/clear", "/reset":
-			a.session.Reset()
+			if err := a.session.Reset(); err != nil {
+				a.err = "Reset failed: " + err.Error()
+			} else {
+				a.err = ""
+			}
 			a.viewport.SetContent("")
-			a.err = ""
 			a.lastActivity = "Conversation reset"
 			a.input.SetValue("")
 			return a, nil

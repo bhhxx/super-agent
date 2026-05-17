@@ -1,48 +1,39 @@
 package runtime
 
-import "errors"
+type ToolDecision int
+
+const (
+	DecisionNeedsApproval ToolDecision = iota
+	DecisionRunDirectly
+)
+
+type ToolPolicyInput struct {
+	ToolSpecs []ToolSpec
+}
 
 type Policy interface {
-	Reclassify(event Event) Event
+	ClassifyToolCall(call ToolCall, input ToolPolicyInput) ToolDecision
+}
+
+type ApprovalConfigurator interface {
+	AddAlwaysAllow(key string)
+	SetAutoApproveTools(enabled bool)
 }
 
 type DefaultPolicy struct {
 	AlwaysAllow      map[string]bool
 	AutoApproveTools bool
-	Specs            []ToolSpec
 }
 
 func NewDefaultPolicy() *DefaultPolicy {
 	return &DefaultPolicy{AlwaysAllow: make(map[string]bool)}
 }
 
-func (p *DefaultPolicy) Reclassify(event Event) Event {
-	switch ev := event.(type) {
-	case ToolCallsReceived:
-		if len(ev.Calls) == 0 {
-			return ErrorOccurred{Err: errors.New("empty tool calls")}
-		}
-		first := ev.Calls[0]
-		if p.needsApproval(first) {
-			return ToolCallsBlockedForApproval{
-				Content:          ev.Content,
-				Calls:            ev.Calls,
-				ReasoningContent: ev.ReasoningContent,
-			}
-		}
-		return ToolCallsApprovedToRun{
-			Content:          ev.Content,
-			Calls:            ev.Calls,
-			ReasoningContent: ev.ReasoningContent,
-		}
-	case NextToolCallAvailable:
-		if p.needsApproval(ev.Call) {
-			return NextToolCallNeedsApproval{Call: ev.Call}
-		}
-		return NextToolCallReadyToRun{Call: ev.Call}
-	default:
-		return event
+func (p *DefaultPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput) ToolDecision {
+	if p.needsApproval(call, input.ToolSpecs) {
+		return DecisionNeedsApproval
 	}
+	return DecisionRunDirectly
 }
 
 func (p *DefaultPolicy) AddAlwaysAllow(key string) {
@@ -56,13 +47,13 @@ func (p *DefaultPolicy) SetAutoApproveTools(enabled bool) {
 	p.AutoApproveTools = enabled
 }
 
-func (p *DefaultPolicy) needsApproval(call ToolCall) bool {
-	risky := p.isRiskyTool(call.Name)
+func (p *DefaultPolicy) needsApproval(call ToolCall, specs []ToolSpec) bool {
+	risky := isRiskyTool(call.Name, specs)
 	return risky && !p.AlwaysAllow[toolCallKey(call)] && !p.AutoApproveTools
 }
 
-func (p *DefaultPolicy) isRiskyTool(name string) bool {
-	for _, s := range p.Specs {
+func isRiskyTool(name string, specs []ToolSpec) bool {
+	for _, s := range specs {
 		if s.Name == name {
 			return s.Risky
 		}

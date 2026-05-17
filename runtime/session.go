@@ -81,8 +81,8 @@ func (s *Session) Cancel() error {
 	return s.engine.Cancel()
 }
 
-func (s *Session) Reset() {
-	s.engine.Reset()
+func (s *Session) Reset() error {
+	return s.engine.Reset()
 }
 
 func (s *Session) Snapshot() Snapshot {
@@ -130,7 +130,10 @@ func waitApproval(ctx context.Context, approvals <-chan ApprovalDecision) (Appro
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
-	case action := <-approvals:
+	case action, ok := <-approvals:
+		if !ok {
+			return "", errors.New("approval channel closed")
+		}
 		return action, nil
 	}
 }

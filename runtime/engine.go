@@ -38,7 +38,7 @@ func NewEngineWithExecutorAndPolicy(executor EffectExecutor, policy Policy, init
 func (e *Engine) EnableAutoApproveTools() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if p, ok := e.policy.(*DefaultPolicy); ok {
+	if p, ok := e.policy.(ApprovalConfigurator); ok {
 		p.SetAutoApproveTools(true)
 	}
 }
@@ -86,10 +86,10 @@ func (e *Engine) snapshot() Snapshot {
 	return snapshot
 }
 
-func (e *Engine) Ready() {
+func (e *Engine) Ready() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_ = e.dispatchLocked(EngineReady{})
+	return e.dispatchLocked(EngineReady{})
 }
 
 func (e *Engine) Approve(ctx context.Context, chunkFunc func(StreamChunk)) error {
@@ -141,8 +141,8 @@ func (e *Engine) Cancel() error {
 	return e.dispatch(CancelRequested{})
 }
 
-func (e *Engine) Reset() {
-	_ = e.dispatch(ResetRequested{})
+func (e *Engine) Reset() error {
+	return e.dispatch(ResetRequested{})
 }
 
 func (e *Engine) dispatchEventThenRunEffects(ctx context.Context, event Event, chunkFunc func(StreamChunk), afterDispatch func()) error {
@@ -204,7 +204,7 @@ func (e *Engine) applyMutation(mutation Mutation) error {
 		e.state.QueuedToolCalls = nil
 		e.effectQueue = nil
 	case AddAlwaysAllow:
-		if p, ok := e.policy.(*DefaultPolicy); ok {
+		if p, ok := e.policy.(ApprovalConfigurator); ok {
 			p.AddAlwaysAllow(m.Key)
 		}
 	default:
@@ -244,8 +244,7 @@ func (e *Engine) executeEffect(ctx context.Context, effect Effect, chunkFunc fun
 	}
 	e.mu.Lock()
 	event := resolveResult(result, e.state.QueuedToolCalls)
-	e.setPolicySpecs(e.toolSpecs())
-	event = e.policy.Reclassify(event)
+	event = e.classifyEvent(event)
 	err = e.dispatchLocked(event)
 	e.mu.Unlock()
 	return err
@@ -282,8 +281,32 @@ func (e *Engine) toolSpecs() []ToolSpec {
 	return nil
 }
 
-func (e *Engine) setPolicySpecs(specs []ToolSpec) {
-	if p, ok := e.policy.(*DefaultPolicy); ok {
-		p.Specs = specs
+func (e *Engine) classifyEvent(event Event) Event {
+	switch ev := event.(type) {
+	case ToolCallsReceived:
+		if len(ev.Calls) == 0 {
+			return ErrorOccurred{Err: errors.New("empty tool calls")}
+		}
+		input := ToolPolicyInput{ToolSpecs: e.toolSpecs()}
+		if e.policy.ClassifyToolCall(ev.Calls[0], input) == DecisionNeedsApproval {
+			return ToolCallBatchFirstNeedsApproval{
+				Content:          ev.Content,
+				Calls:            ev.Calls,
+				ReasoningContent: ev.ReasoningContent,
+			}
+		}
+		return ToolCallBatchFirstReadyToRun{
+			Content:          ev.Content,
+			Calls:            ev.Calls,
+			ReasoningContent: ev.ReasoningContent,
+		}
+	case NextToolCallAvailable:
+		input := ToolPolicyInput{ToolSpecs: e.toolSpecs()}
+		if e.policy.ClassifyToolCall(ev.Call, input) == DecisionNeedsApproval {
+			return QueuedToolCallNeedsApproval{Call: ev.Call}
+		}
+		return QueuedToolCallReadyToRun{Call: ev.Call}
+	default:
+		return event
 	}
 }

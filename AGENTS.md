@@ -26,18 +26,19 @@ Runtime rule:
 
 ```text
 Effect executed → ExecutionResult → resolveResult (pure function) → raw Event
-  → Policy.Reclassify → classified Event → Transition(state, event)
+  → Engine asks Policy.ClassifyToolCall(call, toolPolicyInput) when tool approval is needed
+  → classified Event → Transition(state, event)
   → TransitionResult { NextState, Mutations, Effects } → applyMutation → runEffects
 ```
 
-Transition table (events shown after Policy reclassification):
+Transition table (tool events shown after policy classification):
 
 - `State`: current runtime phase.
 - `Event`: fact that triggers a transition.
 - `Mutation`: synchronous internal state change.
 - `Effect`: work requested by a transition, such as model calls, tool execution, or internal tool-queue processing.
 - `Transition`: pure state-machine decision. All state changes go through Transition → Mutation — no other code touches engine state directly.
-- `Policy`: approval rules. Receives raw events (`ToolCallsReceived`, `NextToolCallAvailable`) and reclassifies them into approval-gated events (`ToolCallsBlockedForApproval`, `ToolCallsApprovedToRun`, etc.). Moves risk-checking, always-allow, and yolo logic out of Engine.
+- `Policy`: approval rules. Classifies one tool call with `ToolPolicyInput`, including tool specs. Default policy handles risk-checking, always-allow, and yolo configuration.
 - `Engine`: scheduler. Receives events, calls Transition, applies mutations, executes effects. Does not own approval logic — that belongs to Policy.
 - `Session`: channel boundary for UI events and approvals. Runs one turn (`RunTurn`) per user input, guarded against concurrent calls.
 
@@ -46,19 +47,18 @@ Transition table (events shown after Policy reclassification):
 | Initializing | EngineReady | Idle | - | - |
 | Idle | UserMessageSubmitted | WaitingLLM | AppendUserMessage | CallModel |
 | WaitingLLM | AssistantMessageReceived | Idle | AppendAssistantMessage | - |
-| WaitingLLM | ToolCallsBlockedForApproval | WaitingApproval | AppendAssistantMessage, SetQueuedToolCalls, SetPendingTool | - |
-| WaitingLLM | ToolCallsApprovedToRun | RunningTool | AppendAssistantMessage, SetQueuedToolCalls | RunTool |
+| WaitingLLM | ToolCallBatchFirstNeedsApproval | WaitingApproval | AppendAssistantMessage, SetQueuedToolCalls, SetPendingTool | - |
+| WaitingLLM | ToolCallBatchFirstReadyToRun | RunningTool | AppendAssistantMessage, SetQueuedToolCalls | RunTool |
 | WaitingApproval | ApprovalGranted | RunningTool | ClearPendingTool | RunTool |
 | WaitingApproval | ApprovalAlwaysGranted | RunningTool | ClearPendingTool, AddAlwaysAllow | RunTool |
 | WaitingApproval | ApprovalDenied | AdvancingQueue | ClearPendingTool, AppendToolResult | ProcessNextToolCall |
 | RunningTool | ToolResultReceived | AdvancingQueue | AppendToolResult | ProcessNextToolCall |
 | AdvancingQueue | NoMoreToolCalls | WaitingLLM | - | CallModel |
-| AdvancingQueue | NextToolCallNeedsApproval | WaitingApproval | SetPendingTool, PopQueuedToolCall | - |
-| AdvancingQueue | NextToolCallReadyToRun | RunningTool | PopQueuedToolCall | RunTool |
+| AdvancingQueue | QueuedToolCallNeedsApproval | WaitingApproval | SetPendingTool, PopQueuedToolCall | - |
+| AdvancingQueue | QueuedToolCallReadyToRun | RunningTool | PopQueuedToolCall | RunTool |
 | any | ErrorOccurred | Idle | ClearPendingTool, ClearQueuedToolCalls, ClearPendingEffects | - |
 | any | CancelRequested | Idle | ClearPendingTool, ClearQueuedToolCalls, ClearPendingEffects | - |
 | any | ResetRequested | Idle | ResetContext | - |
-| any | AutoApproveToolsRequested | same | SetAutoApproveTools | - |
 
 ## Build, Test, and Development Commands
 

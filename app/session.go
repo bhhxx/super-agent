@@ -19,6 +19,8 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 	if cfg.AutoApproveTools {
 		engine.EnableAutoApproveTools()
 	}
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		return nil, err
+	}
 	return runtime.NewSession(engine), nil
 }

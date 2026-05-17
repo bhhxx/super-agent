@@ -58,111 +58,111 @@ func TestTransitionTable(t *testing.T) {
 		// --- AssistantMessageReceived ---
 		{
 			name: "AssistantMessageReceived/WaitingLLM->Idle", state: StateWaitingLLM,
-			event: AssistantMessageReceived{Response: ModelResponse{Content: "hi"}},
-			wantState: StateIdle,
+			event:         AssistantMessageReceived{Response: ModelResponse{Content: "hi"}},
+			wantState:     StateIdle,
 			mutationCount: 1,
-			mutationType: AppendAssistantMessage{},
+			mutationType:  AppendAssistantMessage{},
 		},
 		{
 			name: "AssistantMessageReceived/rejects_when_not_WaitingLLM", state: StateIdle,
-			event: AssistantMessageReceived{Response: ModelResponse{Content: "hi"}},
+			event:   AssistantMessageReceived{Response: ModelResponse{Content: "hi"}},
 			wantErr: true,
 		},
 
-		// --- ToolCallsBlockedForApproval ---
+		// --- ToolCallBatchFirstNeedsApproval ---
 		{
-			name: "ToolCallsBlockedForApproval/WaitingLLM->WaitingApproval", state: StateWaitingLLM,
-			event: ToolCallsBlockedForApproval{
+			name: "ToolCallBatchFirstNeedsApproval/WaitingLLM->WaitingApproval", state: StateWaitingLLM,
+			event: ToolCallBatchFirstNeedsApproval{
 				Content: "thinking", Calls: sampleToolCalls(), ReasoningContent: "reasoning",
 			},
-			wantState: StateWaitingApproval,
+			wantState:     StateWaitingApproval,
 			mutationCount: 3, // AppendAssistantMessage + SetQueuedToolCalls + SetPendingTool
-			effectCount:  0,
+			effectCount:   0,
 		},
 		{
-			name: "ToolCallsBlockedForApproval/rejects_when_not_WaitingLLM", state: StateIdle,
-			event: ToolCallsBlockedForApproval{Calls: sampleToolCalls()},
+			name: "ToolCallBatchFirstNeedsApproval/rejects_when_not_WaitingLLM", state: StateIdle,
+			event:   ToolCallBatchFirstNeedsApproval{Calls: sampleToolCalls()},
 			wantErr: true,
 		},
 
-		// --- ToolCallsApprovedToRun ---
+		// --- ToolCallBatchFirstReadyToRun ---
 		{
-			name: "ToolCallsApprovedToRun/WaitingLLM->RunningTool", state: StateWaitingLLM,
-			event: ToolCallsApprovedToRun{
+			name: "ToolCallBatchFirstReadyToRun/WaitingLLM->RunningTool", state: StateWaitingLLM,
+			event: ToolCallBatchFirstReadyToRun{
 				Content: "thinking", Calls: sampleToolCalls(), ReasoningContent: "reasoning",
 			},
-			wantState: StateRunningTool,
+			wantState:     StateRunningTool,
 			mutationCount: 2, // AppendAssistantMessage + SetQueuedToolCalls
 			effectCount:   1,
 			effectType:    RunTool{},
 		},
 		{
-			name: "ToolCallsApprovedToRun/rejects_when_not_WaitingLLM", state: StateIdle,
-			event: ToolCallsApprovedToRun{Calls: sampleToolCalls()},
+			name: "ToolCallBatchFirstReadyToRun/rejects_when_not_WaitingLLM", state: StateIdle,
+			event:   ToolCallBatchFirstReadyToRun{Calls: sampleToolCalls()},
 			wantErr: true,
 		},
 
 		// --- ApprovalGranted ---
 		{
 			name: "ApprovalGranted/WaitingApproval->RunningTool", state: StateWaitingApproval,
-			event: ApprovalGranted{Call: sampleToolCall()},
-			wantState: StateRunningTool,
+			event:         ApprovalGranted{Call: sampleToolCall()},
+			wantState:     StateRunningTool,
 			mutationCount: 1, mutationType: ClearPendingTool{},
 			effectCount: 1, effectType: RunTool{},
 		},
 		{
 			name: "ApprovalGranted/rejects_when_not_WaitingApproval", state: StateIdle,
-			event: ApprovalGranted{Call: sampleToolCall()},
+			event:   ApprovalGranted{Call: sampleToolCall()},
 			wantErr: true,
 		},
 
 		// --- ApprovalAlwaysGranted ---
 		{
 			name: "ApprovalAlwaysGranted/WaitingApproval->RunningTool", state: StateWaitingApproval,
-			event: ApprovalAlwaysGranted{Call: sampleToolCall()},
-			wantState: StateRunningTool,
+			event:         ApprovalAlwaysGranted{Call: sampleToolCall()},
+			wantState:     StateRunningTool,
 			mutationCount: 2, // ClearPendingTool + AddAlwaysAllow
 			effectCount:   1, effectType: RunTool{},
 		},
 		{
 			name: "ApprovalAlwaysGranted/rejects_when_not_WaitingApproval", state: StateIdle,
-			event: ApprovalAlwaysGranted{Call: sampleToolCall()},
+			event:   ApprovalAlwaysGranted{Call: sampleToolCall()},
 			wantErr: true,
 		},
 
 		// --- ApprovalDenied ---
 		{
 			name: "ApprovalDenied/WaitingApproval->AdvancingQueue", state: StateWaitingApproval,
-			event: ApprovalDenied{Call: sampleToolCall()},
-			wantState: StateAdvancingQueue,
+			event:         ApprovalDenied{Call: sampleToolCall()},
+			wantState:     StateAdvancingQueue,
 			mutationCount: 2, // ClearPendingTool + AppendToolResult
 			effectCount:   1, effectType: ProcessNextToolCall{},
 		},
 		{
 			name: "ApprovalDenied/rejects_when_not_WaitingApproval", state: StateIdle,
-			event: ApprovalDenied{Call: sampleToolCall()},
+			event:   ApprovalDenied{Call: sampleToolCall()},
 			wantErr: true,
 		},
 
 		// --- ToolResultReceived ---
 		{
 			name: "ToolResultReceived/RunningTool->AdvancingQueue", state: StateRunningTool,
-			event: ToolResultReceived{Call: sampleToolCall(), Result: "ok"},
-			wantState: StateAdvancingQueue,
+			event:         ToolResultReceived{Call: sampleToolCall(), Result: "ok"},
+			wantState:     StateAdvancingQueue,
 			mutationCount: 1, mutationType: AppendToolResult{},
-			effectCount:   1, effectType: ProcessNextToolCall{},
+			effectCount: 1, effectType: ProcessNextToolCall{},
 		},
 		{
 			name: "ToolResultReceived/rejects_when_not_RunningTool", state: StateIdle,
-			event: ToolResultReceived{Call: sampleToolCall(), Result: "ok"},
+			event:   ToolResultReceived{Call: sampleToolCall(), Result: "ok"},
 			wantErr: true,
 		},
 
 		// --- NoMoreToolCalls ---
 		{
 			name: "NoMoreToolCalls/AdvancingQueue->WaitingLLM", state: StateAdvancingQueue,
-			event:     NoMoreToolCalls{},
-			wantState: StateWaitingLLM,
+			event:       NoMoreToolCalls{},
+			wantState:   StateWaitingLLM,
 			effectCount: 1, effectType: CallModel{},
 		},
 		{
@@ -170,50 +170,50 @@ func TestTransitionTable(t *testing.T) {
 			event: NoMoreToolCalls{}, wantErr: true,
 		},
 
-		// --- NextToolCallNeedsApproval ---
+		// --- QueuedToolCallNeedsApproval ---
 		{
-			name: "NextToolCallNeedsApproval/AdvancingQueue->WaitingApproval", state: StateAdvancingQueue,
-			event: NextToolCallNeedsApproval{Call: sampleToolCall()},
-			wantState: StateWaitingApproval,
+			name: "QueuedToolCallNeedsApproval/AdvancingQueue->WaitingApproval", state: StateAdvancingQueue,
+			event:         QueuedToolCallNeedsApproval{Call: sampleToolCall()},
+			wantState:     StateWaitingApproval,
 			mutationCount: 2, // SetPendingTool + PopQueuedToolCall
 		},
 		{
-			name: "NextToolCallNeedsApproval/rejects_when_not_AdvancingQueue", state: StateIdle,
-			event: NextToolCallNeedsApproval{Call: sampleToolCall()},
+			name: "QueuedToolCallNeedsApproval/rejects_when_not_AdvancingQueue", state: StateIdle,
+			event:   QueuedToolCallNeedsApproval{Call: sampleToolCall()},
 			wantErr: true,
 		},
 
-		// --- NextToolCallReadyToRun ---
+		// --- QueuedToolCallReadyToRun ---
 		{
-			name: "NextToolCallReadyToRun/AdvancingQueue->RunningTool", state: StateAdvancingQueue,
-			event: NextToolCallReadyToRun{Call: sampleToolCall()},
-			wantState: StateRunningTool,
+			name: "QueuedToolCallReadyToRun/AdvancingQueue->RunningTool", state: StateAdvancingQueue,
+			event:         QueuedToolCallReadyToRun{Call: sampleToolCall()},
+			wantState:     StateRunningTool,
 			mutationCount: 1, mutationType: PopQueuedToolCall{},
-			effectCount:   1, effectType: RunTool{},
+			effectCount: 1, effectType: RunTool{},
 		},
 		{
-			name: "NextToolCallReadyToRun/rejects_when_not_AdvancingQueue", state: StateIdle,
-			event: NextToolCallReadyToRun{Call: sampleToolCall()},
+			name: "QueuedToolCallReadyToRun/rejects_when_not_AdvancingQueue", state: StateIdle,
+			event:   QueuedToolCallReadyToRun{Call: sampleToolCall()},
 			wantErr: true,
 		},
 
 		// --- ErrorOccurred ---
 		{
 			name: "ErrorOccurred/WaitingLLM->Idle", state: StateWaitingLLM,
-			event: ErrorOccurred{Err: errors.New("boom")},
-			wantState: StateIdle,
+			event:         ErrorOccurred{Err: errors.New("boom")},
+			wantState:     StateIdle,
 			mutationCount: 3, // ClearPendingTool + ClearQueuedToolCalls + ClearPendingEffects
 		},
 		{
 			name: "ErrorOccurred/RunningTool->Idle", state: StateRunningTool,
-			event: ErrorOccurred{Err: errors.New("boom")},
-			wantState: StateIdle,
+			event:         ErrorOccurred{Err: errors.New("boom")},
+			wantState:     StateIdle,
 			mutationCount: 3,
 		},
 		{
 			name: "ErrorOccurred/AdvancingQueue->Idle", state: StateAdvancingQueue,
-			event: ErrorOccurred{Err: errors.New("boom")},
-			wantState: StateIdle,
+			event:         ErrorOccurred{Err: errors.New("boom")},
+			wantState:     StateIdle,
 			mutationCount: 3,
 		},
 

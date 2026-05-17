@@ -34,7 +34,9 @@ func (noopTools) Specs() []runtime.ToolSpec {
 func TestSubmitShowsWaitingLLMWhileModelCommandRuns(t *testing.T) {
 	release := make(chan struct{})
 	engine := runtime.NewEngine(blockingModel{release: release}, noopTools{}, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	session := runtime.NewSession(engine)
 	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model"})
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -67,7 +69,9 @@ func TestSubmitShowsWaitingLLMWhileModelCommandRuns(t *testing.T) {
 func TestQuestionMarkCanBeTypedInPrompt(t *testing.T) {
 	release := make(chan struct{})
 	engine := runtime.NewEngine(blockingModel{release: release}, noopTools{}, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	session := runtime.NewSession(engine)
 	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model"})
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -97,7 +101,9 @@ func TestApprovalUsesShortcutKeys(t *testing.T) {
 		{ToolCalls: []runtime.ToolCall{{Name: "bash", Input: "printf ok"}}},
 		{Content: "done"},
 	}}, &recordingTools{results: map[string]string{"bash": "ok"}}, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	session := runtime.NewSession(engine)
 
 	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model"})
@@ -129,7 +135,9 @@ func TestEscCancelsPendingApproval(t *testing.T) {
 	engine := runtime.NewEngine(&approvalModel{responses: []runtime.ModelResponse{
 		{ToolCalls: []runtime.ToolCall{{Name: "bash", Input: "printf ok"}}},
 	}}, &recordingTools{results: map[string]string{"bash": "ok"}}, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	session := runtime.NewSession(engine)
 
 	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model"})

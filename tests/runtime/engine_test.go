@@ -52,9 +52,22 @@ func TestNewEngineStartsInitializingAndReadyEntersIdle(t *testing.T) {
 	if engine.State() != StateInitializing {
 		t.Fatalf("state = %s, want %s", engine.State(), StateInitializing)
 	}
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	if engine.State() != StateIdle {
 		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
+	}
+}
+
+func TestReadyReturnsErrorWhenAlreadyReady(t *testing.T) {
+	engine := NewEngine(&scriptedModel{}, &fakeTool{}, nil)
+
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Ready(); err == nil {
+		t.Fatal("Ready succeeded after engine was already ready")
 	}
 }
 
@@ -63,7 +76,9 @@ func TestSessionRunProducesContent(t *testing.T) {
 		{Content: "hello", ReasoningContent: "thinking"},
 	}}
 	engine := NewEngine(model, &fakeTool{}, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 
 	runSession(t, engine, "hi")
 
@@ -84,10 +99,37 @@ func (x *recordingExecutor) Execute(_ context.Context, effect Effect, _ Executio
 	return ModelReplied{Response: ModelResponse{Content: "from executor"}}, nil
 }
 
+type recordingPolicy struct {
+	decision    ToolDecision
+	calls       []ToolCall
+	specs       [][]ToolSpec
+	autoApprove bool
+	alwaysAllow []string
+}
+
+func (p *recordingPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput) ToolDecision {
+	p.calls = append(p.calls, call)
+	p.specs = append(p.specs, append([]ToolSpec(nil), input.ToolSpecs...))
+	if p.autoApprove {
+		return DecisionRunDirectly
+	}
+	return p.decision
+}
+
+func (p *recordingPolicy) AddAlwaysAllow(key string) {
+	p.alwaysAllow = append(p.alwaysAllow, key)
+}
+
+func (p *recordingPolicy) SetAutoApproveTools(enabled bool) {
+	p.autoApprove = enabled
+}
+
 func TestEngineRunsEffectsThroughInjectedExecutor(t *testing.T) {
 	executor := &recordingExecutor{}
 	engine := NewEngineWithExecutor(executor, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 
 	runSession(t, engine, "hi")
 
@@ -102,14 +144,106 @@ func TestEngineRunsEffectsThroughInjectedExecutor(t *testing.T) {
 	}
 }
 
+func TestCustomPolicyClassifiesToolCallWithContext(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+		{Content: "done"},
+	}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
+	policy := &recordingPolicy{decision: DecisionRunDirectly}
+	engine := NewEngineWithExecutorAndPolicy(NewDefaultEffectExecutor(model, tools), policy, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	runSession(t, engine, "use bash")
+
+	if len(policy.calls) != 1 || policy.calls[0].Name != "bash" {
+		t.Fatalf("policy calls = %+v, want bash", policy.calls)
+	}
+	if len(policy.specs) != 1 || len(policy.specs[0]) != 1 || policy.specs[0][0].Name != "bash" || !policy.specs[0][0].Risky {
+		t.Fatalf("policy specs = %+v, want risky bash spec", policy.specs)
+	}
+	if len(tools.calls) != 1 {
+		t.Fatalf("tool calls = %+v, want one", tools.calls)
+	}
+}
+
+func TestCustomPolicyReceivesAutoApproveConfiguration(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+		{Content: "done"},
+	}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
+	policy := &recordingPolicy{decision: DecisionNeedsApproval}
+	engine := NewEngineWithExecutorAndPolicy(NewDefaultEffectExecutor(model, tools), policy, nil)
+	engine.EnableAutoApproveTools()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	runSession(t, engine, "use bash")
+
+	if !policy.autoApprove {
+		t.Fatal("custom policy did not receive auto-approve configuration")
+	}
+	if len(tools.calls) != 1 {
+		t.Fatalf("tool calls = %+v, want one", tools.calls)
+	}
+}
+
+func TestCustomPolicyReceivesApproveAlwaysConfiguration(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+		{Content: "done"},
+	}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
+	policy := &recordingPolicy{decision: DecisionNeedsApproval}
+	engine := NewEngineWithExecutorAndPolicy(NewDefaultEffectExecutor(model, tools), policy, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.RunTurn(context.Background(), "use bash", events, approvals)
+	}()
+
+	waitForApproval(t, events, approvals, nil)
+	approvals <- ApproveAlways
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if len(policy.alwaysAllow) != 1 {
+		t.Fatalf("always allow keys = %+v, want one", policy.alwaysAllow)
+	}
+}
+
 func TestToolCallFeedsResultBackToModel(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
 		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf pong"}}},
 		{Content: "tool said pong"},
 	}}
-	tools := &fakeTool{results: map[string]string{"bash": "pong"}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "pong"},
+		specs:   []ToolSpec{{Name: "bash"}},
+	}
 	engine := NewEngine(model, tools, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 
 	runSession(t, engine, "use bash")
 
@@ -133,9 +267,14 @@ func TestMultipleToolCallsFeedAllResultsBackToModel(t *testing.T) {
 		}},
 		{Content: "done"},
 	}}
-	tools := &fakeTool{results: map[string]string{"first": "one", "second": "two"}}
+	tools := &fakeTool{
+		results: map[string]string{"first": "one", "second": "two"},
+		specs:   []ToolSpec{{Name: "first"}, {Name: "second"}},
+	}
 	engine := NewEngine(model, tools, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 
 	runSession(t, engine, "use tools")
 
@@ -173,7 +312,9 @@ func TestQueuedRiskyToolWaitsForApproval(t *testing.T) {
 		specs:   []ToolSpec{{Name: "first"}, {Name: "second", Risky: true}},
 	}
 	engine := NewEngine(model, tools, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 
 	session := NewSession(engine)
 	events := make(chan SessionEvent, 20)
@@ -213,9 +354,14 @@ func TestToolCallAssistantContentIsPreserved(t *testing.T) {
 		},
 		{Content: "done"},
 	}}
-	tools := &fakeTool{results: map[string]string{"bash": "ok"}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash"}},
+	}
 	engine := NewEngine(model, tools, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 
 	runSession(t, engine, "use bash")
 
@@ -235,7 +381,9 @@ func TestRiskyToolWaitsForShortcutApproval(t *testing.T) {
 		specs:   []ToolSpec{{Name: "bash", Risky: true}},
 	}
 	engine := NewEngine(model, tools, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 
 	session := NewSession(engine)
 	events := make(chan SessionEvent, 20)
@@ -284,7 +432,9 @@ func TestToolRiskComesFromToolSpec(t *testing.T) {
 		specs:   []ToolSpec{{Name: "bash", Risky: true}},
 	}
 	engine := NewEngine(model, tools, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 
 	session := NewSession(engine)
 	events := make(chan SessionEvent, 20)
@@ -405,7 +555,9 @@ func TestCancelClearsPendingToolAndEffects(t *testing.T) {
 		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /"}}},
 	}}
 	engine := NewEngine(model, &fakeTool{specs: []ToolSpec{{Name: "bash", Risky: true}}}, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 
 	session := NewSession(engine)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -455,7 +607,9 @@ func TestSessionRunStartsAndFinishesRun(t *testing.T) {
 		{Content: "hello"},
 	}}
 	engine := NewEngine(model, &fakeTool{}, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	session := NewSession(engine)
 	events := make(chan SessionEvent, 10)
 	approvals := make(chan ApprovalDecision, 1)
@@ -475,7 +629,9 @@ func TestSessionRunEmitsStateAndFinalMessage(t *testing.T) {
 		{Content: "hello", ReasoningContent: "thinking"},
 	}}
 	engine := NewEngine(model, &fakeTool{}, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	session := NewSession(engine)
 	events := make(chan SessionEvent, 10)
 	approvals := make(chan ApprovalDecision, 1)
@@ -510,7 +666,9 @@ func TestSessionRunEmitsEachAppendedMessageOnce(t *testing.T) {
 		{Content: "hello"},
 	}}
 	engine := NewEngine(model, &fakeTool{}, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	session := NewSession(engine)
 	events := make(chan SessionEvent, 10)
 	approvals := make(chan ApprovalDecision, 1)
@@ -547,7 +705,9 @@ func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 		specs:   []ToolSpec{{Name: "bash", Risky: true}},
 	}
 	engine := NewEngine(model, tools, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	session := NewSession(engine)
 	events := make(chan SessionEvent, 20)
 	approvals := make(chan ApprovalDecision, 1)
@@ -576,6 +736,38 @@ func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 	}
 }
 
+func TestSessionRunReturnsErrorWhenApprovalChannelCloses(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+	}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
+	engine := NewEngine(model, tools, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.RunTurn(context.Background(), "run bash", events, approvals)
+	}()
+
+	waitForApproval(t, events, approvals, nil)
+	close(approvals)
+	err := <-done
+	if err == nil || err.Error() != "approval channel closed" {
+		t.Fatalf("Run error = %v, want approval channel closed", err)
+	}
+	if len(tools.calls) != 0 {
+		t.Fatalf("tool calls = %+v, want none", tools.calls)
+	}
+}
+
 func TestApproveAlwaysIsScopedToToolNameAndInput(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
 		{ToolCalls: []ToolCall{{Name: "bash", Input: "ls"}}},
@@ -589,7 +781,9 @@ func TestApproveAlwaysIsScopedToToolNameAndInput(t *testing.T) {
 		specs:   []ToolSpec{{Name: "bash", Risky: true}, {Name: "read", Risky: true}},
 	}
 	engine := NewEngine(model, tools, nil)
-	engine.Ready()
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
 	session := NewSession(engine)
 	events := make(chan SessionEvent, 20)
 	approvals := make(chan ApprovalDecision, 1)

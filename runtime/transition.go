@@ -35,7 +35,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 				ReasoningContent: ev.Response.ReasoningContent,
 			}}},
 		}, nil
-	case ToolCallsBlockedForApproval:
+	case ToolCallBatchFirstNeedsApproval:
 		if state != StateWaitingLLM {
 			return TransitionResult{}, errors.New("runtime is not waiting for llm")
 		}
@@ -60,7 +60,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 				SetPendingTool{Call: ev.Calls[0]},
 			},
 		}, nil
-	case ToolCallsApprovedToRun:
+	case ToolCallBatchFirstReadyToRun:
 		if state != StateWaitingLLM {
 			return TransitionResult{}, errors.New("runtime is not waiting for llm")
 		}
@@ -134,7 +134,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 			NextState: StateWaitingLLM,
 			Effects:   []Effect{CallModel{}},
 		}, nil
-	case NextToolCallNeedsApproval:
+	case QueuedToolCallNeedsApproval:
 		if state != StateAdvancingQueue {
 			return TransitionResult{}, errors.New("invalid state for next tool call")
 		}
@@ -145,7 +145,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 				PopQueuedToolCall{},
 			},
 		}, nil
-	case NextToolCallReadyToRun:
+	case QueuedToolCallReadyToRun:
 		if state != StateAdvancingQueue {
 			return TransitionResult{}, errors.New("invalid state for next tool call")
 		}

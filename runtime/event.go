@@ -10,8 +10,8 @@ var AllEvents = []Event{
 	UserMessageSubmitted{},
 	AssistantMessageReceived{},
 	ToolCallsReceived{},
-	ToolCallsBlockedForApproval{},
-	ToolCallsApprovedToRun{},
+	ToolCallBatchFirstNeedsApproval{},
+	ToolCallBatchFirstReadyToRun{},
 	ToolResultReceived{},
 	ApprovalGranted{},
 	ApprovalAlwaysGranted{},
@@ -21,8 +21,8 @@ var AllEvents = []Event{
 	ResetRequested{},
 	NoMoreToolCalls{},
 	NextToolCallAvailable{},
-	NextToolCallNeedsApproval{},
-	NextToolCallReadyToRun{},
+	QueuedToolCallNeedsApproval{},
+	QueuedToolCallReadyToRun{},
 	EngineReady{},
 }
 
@@ -46,21 +46,21 @@ type ToolCallsReceived struct {
 
 func (ToolCallsReceived) isEvent() {}
 
-type ToolCallsBlockedForApproval struct {
+type ToolCallBatchFirstNeedsApproval struct {
 	Content          string
 	Calls            []ToolCall
 	ReasoningContent string
 }
 
-func (ToolCallsBlockedForApproval) isEvent() {}
+func (ToolCallBatchFirstNeedsApproval) isEvent() {}
 
-type ToolCallsApprovedToRun struct {
+type ToolCallBatchFirstReadyToRun struct {
 	Content          string
 	Calls            []ToolCall
 	ReasoningContent string
 }
 
-func (ToolCallsApprovedToRun) isEvent() {}
+func (ToolCallBatchFirstReadyToRun) isEvent() {}
 
 type ToolResultReceived struct {
 	Call   ToolCall
@@ -111,19 +111,18 @@ type NextToolCallAvailable struct {
 
 func (NextToolCallAvailable) isEvent() {}
 
-type NextToolCallNeedsApproval struct {
+type QueuedToolCallNeedsApproval struct {
 	Call ToolCall
 }
 
-func (NextToolCallNeedsApproval) isEvent() {}
+func (QueuedToolCallNeedsApproval) isEvent() {}
 
-type NextToolCallReadyToRun struct {
+type QueuedToolCallReadyToRun struct {
 	Call ToolCall
 }
 
-func (NextToolCallReadyToRun) isEvent() {}
+func (QueuedToolCallReadyToRun) isEvent() {}
 
 type EngineReady struct{}
 
 func (EngineReady) isEvent() {}
-
