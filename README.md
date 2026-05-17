@@ -1,21 +1,41 @@
-# README
+# Super Agent
 
-## 本项目将始终基于状态机这个心智模型
+Go agent runtime with a state-machine core, LLM providers, local tools, and a Bubble Tea TUI.
 
-思路来自于[状态机视角下的 Agent Runtime](https://mp.weixin.qq.com/s/ylAI6ceodDPa6pvrDFBmDw)
+![TUI screenshot](./static/ui.png)
 
-## 初始框架
+## Run
 
-请查看 `arch.md`
+- `go run .`: start the TUI. Default provider: DeepSeek.
+- `go run . --no-tools`: disable tool calling.
+- `go run . --yolo`: allow autonomous tool execution.
+- `NO_TOOLS=true go run .`: disable tools by env.
+- `YOLO=true go run .`: enable YOLO mode by env.
 
-## TODO
+## Test
 
-- [ ] MCP 兼容
-- [ ] skill 兼容
-- [ ] 系统提示词配置
-- [ ] AGENTS.md 读取
-- [ ] 记忆机制
-- [ ] 持久化的 session
-- [ ] ui 优化
+- `go test ./...`: run all tests.
+- `gofmt -w <files>`: format changed Go files.
 
-![](./static/ui.png)
+## Configuration
+
+`main.go` loads `.env` with `godotenv`.
+
+Provider variables:
+
+- `LLM_PROVIDER`: `deepseek`, `openai`, or `claude`.
+- `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`.
+- `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`.
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`.
+
+DeepSeek uses `DEEPSEEK_API_KEY` and falls back to `OPENAI_API_KEY`.
+
+## Roadmap
+
+- MCP compatibility.
+- Skill compatibility.
+- System prompt config.
+- `AGENTS.md` loading.
+- Memory.
+- Persistent sessions.
+- UI cleanup.

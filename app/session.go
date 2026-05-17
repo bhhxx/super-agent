@@ -16,8 +16,8 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 		toolRunner = tools.NoTools{}
 	}
 	engine := runtime.NewEngine(model, toolRunner, nil)
-	if cfg.YOLO {
-		engine.EnableYOLO()
+	if cfg.AutoApproveTools {
+		engine.EnableAutoApproveTools()
 	}
 	engine.Ready()
 	return runtime.NewSession(engine), nil

@@ -18,7 +18,7 @@ type blockingModel struct {
 
 func (m blockingModel) Next(_ context.Context, _ []runtime.Message, _ []runtime.ToolSpec, _ func(runtime.StreamChunk)) (runtime.ModelResponse, error) {
 	<-m.release
-	return runtime.ModelResponse{FinalAnswer: "done"}, nil
+	return runtime.ModelResponse{Content: "done"}, nil
 }
 
 type noopTools struct{}
@@ -95,7 +95,7 @@ func TestQuestionMarkCanBeTypedInPrompt(t *testing.T) {
 func TestApprovalUsesShortcutKeys(t *testing.T) {
 	engine := runtime.NewEngine(&approvalModel{responses: []runtime.ModelResponse{
 		{ToolCalls: []runtime.ToolCall{{Name: "bash", Input: "printf ok", Risky: true}}},
-		{FinalAnswer: "done"},
+		{Content: "done"},
 	}}, &recordingTools{results: map[string]string{"bash": "ok"}}, nil)
 	engine.Ready()
 	session := runtime.NewSession(engine)

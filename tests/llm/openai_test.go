@@ -68,8 +68,8 @@ func TestOpenAIModelSendsChatCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	if resp.FinalAnswer != "hello from llm" {
-		t.Fatalf("FinalAnswer = %q", resp.FinalAnswer)
+	if resp.Content != "hello from llm" {
+		t.Fatalf("Content = %q", resp.Content)
 	}
 	if requestBody.Model != "test-model" {
 		t.Fatalf("request model = %q", requestBody.Model)
@@ -113,8 +113,8 @@ func TestOpenAIModelUsesSDKDefaultBaseURLWhenConfigBaseURLIsEmpty(t *testing.T) 
 	if !sawDefaultBaseURL {
 		t.Fatal("request did not use OpenAI SDK default base URL")
 	}
-	if resp.FinalAnswer != "ok" {
-		t.Fatalf("FinalAnswer = %q, want ok", resp.FinalAnswer)
+	if resp.Content != "ok" {
+		t.Fatalf("Content = %q, want ok", resp.Content)
 	}
 }
 

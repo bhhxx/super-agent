@@ -8,6 +8,7 @@ type Effect interface {
 var AllEffects = []Effect{
 	CallModel{},
 	RunTool{},
+	ProcessNextToolCall{},
 }
 
 type CallModel struct{}
@@ -19,3 +20,7 @@ type RunTool struct {
 }
 
 func (RunTool) isEffect() {}
+
+type ProcessNextToolCall struct{}
+
+func (ProcessNextToolCall) isEffect() {}

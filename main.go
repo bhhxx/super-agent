@@ -13,15 +13,15 @@ import (
 )
 
 func main() {
-	yoloFlag := flag.Bool("yolo", false, "Enable YOLO mode (autonomous execution)")
+	autoApproveToolsFlag := flag.Bool("yolo", false, "Auto-approve tool execution")
 	noToolsFlag := flag.Bool("no-tools", false, "Disable tool calling")
 	flag.Parse()
 
 	_ = godotenv.Load()
 
 	session, err := app.NewSession(app.LoadConfig(app.Flags{
-		YOLO:    *yoloFlag,
-		NoTools: *noToolsFlag,
+		AutoApproveTools: *autoApproveToolsFlag,
+		NoTools:          *noToolsFlag,
 	}, os.LookupEnv))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

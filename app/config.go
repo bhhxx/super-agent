@@ -3,14 +3,14 @@ package app
 import "os"
 
 type Flags struct {
-	YOLO    bool
-	NoTools bool
+	AutoApproveTools bool
+	NoTools          bool
 }
 
 type Config struct {
-	Provider string
-	YOLO     bool
-	NoTools  bool
+	Provider         string
+	AutoApproveTools bool
+	NoTools          bool
 }
 
 func LoadConfig(flags Flags, lookup func(string) (string, bool)) Config {
@@ -19,9 +19,9 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) Config {
 	}
 	provider, _ := lookup("LLM_PROVIDER")
 	return Config{
-		Provider: provider,
-		YOLO:     flags.YOLO || envTrue(lookup, "YOLO"),
-		NoTools:  flags.NoTools || envTrue(lookup, "NO_TOOLS"),
+		Provider:         provider,
+		AutoApproveTools: flags.AutoApproveTools || envTrue(lookup, "YOLO"),
+		NoTools:          flags.NoTools || envTrue(lookup, "NO_TOOLS"),
 	}
 }
 

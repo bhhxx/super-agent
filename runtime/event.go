@@ -9,23 +9,21 @@ type Event interface {
 var AllEvents = []Event{
 	UserMessageSubmitted{},
 	AssistantMessageReceived{},
-	ToolCallsRequested{},
+	ToolCallsBlockedForApproval{},
+	ToolCallsApprovedToRun{},
 	ToolResultReceived{},
 	ApprovalGranted{},
+	ApprovalAlwaysGranted{},
 	ApprovalDenied{},
 	ErrorOccurred{},
 	CancelRequested{},
 	ResetRequested{},
-	QueueAdvanceRequested{},
+	NoMoreToolCalls{},
+	NextToolCallNeedsApproval{},
+	NextToolCallReadyToRun{},
+	EngineReady{},
+	AutoApproveToolsRequested{},
 }
-
-type QueueAdvanceRequested struct {
-	QueueLength   int
-	NextCall      *ToolCall
-	NeedsApproval bool
-}
-
-func (QueueAdvanceRequested) isEvent() {}
 
 type UserMessageSubmitted struct {
 	Content string
@@ -39,14 +37,21 @@ type AssistantMessageReceived struct {
 
 func (AssistantMessageReceived) isEvent() {}
 
-type ToolCallsRequested struct {
-	FinalAnswer      string
+type ToolCallsBlockedForApproval struct {
+	Content          string
 	Calls            []ToolCall
 	ReasoningContent string
-	NeedsApproval    bool
 }
 
-func (ToolCallsRequested) isEvent() {}
+func (ToolCallsBlockedForApproval) isEvent() {}
+
+type ToolCallsApprovedToRun struct {
+	Content          string
+	Calls            []ToolCall
+	ReasoningContent string
+}
+
+func (ToolCallsApprovedToRun) isEvent() {}
 
 type ToolResultReceived struct {
 	Call   ToolCall
@@ -61,13 +66,21 @@ type ApprovalGranted struct {
 
 func (ApprovalGranted) isEvent() {}
 
+type ApprovalAlwaysGranted struct {
+	Call ToolCall
+}
+
+func (ApprovalAlwaysGranted) isEvent() {}
+
 type ApprovalDenied struct {
 	Call ToolCall
 }
 
 func (ApprovalDenied) isEvent() {}
 
-type ErrorOccurred struct{}
+type ErrorOccurred struct {
+	Err error
+}
 
 func (ErrorOccurred) isEvent() {}
 
@@ -78,3 +91,29 @@ func (CancelRequested) isEvent() {}
 type ResetRequested struct{}
 
 func (ResetRequested) isEvent() {}
+
+type NoMoreToolCalls struct{}
+
+func (NoMoreToolCalls) isEvent() {}
+
+type NextToolCallNeedsApproval struct {
+	Call ToolCall
+}
+
+func (NextToolCallNeedsApproval) isEvent() {}
+
+type NextToolCallReadyToRun struct {
+	Call ToolCall
+}
+
+func (NextToolCallReadyToRun) isEvent() {}
+
+type EngineReady struct{}
+
+func (EngineReady) isEvent() {}
+
+type AutoApproveToolsRequested struct {
+	Enabled bool
+}
+
+func (AutoApproveToolsRequested) isEvent() {}
