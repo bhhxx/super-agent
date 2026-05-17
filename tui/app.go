@@ -118,7 +118,7 @@ type App struct {
 
 type Conversation interface {
 	Snapshot() runtime.Snapshot
-	Run(context.Context, string, chan<- runtime.SessionEvent, <-chan runtime.ApprovalDecision) error
+	RunTurn(context.Context, string, chan<- runtime.SessionEvent, <-chan runtime.ApprovalDecision) error
 	Cancel() error
 	Reset()
 }
@@ -699,7 +699,7 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 	a.viewport.SetContent(a.contentString())
 	a.viewport.GotoBottom()
 	runCmd := func() tea.Msg {
-		return submitDoneMsg{err: a.session.Run(ctx, text, a.eventsCh, a.approvalsCh)}
+		return submitDoneMsg{err: a.session.RunTurn(ctx, text, a.eventsCh, a.approvalsCh)}
 	}
 	return a, tea.Batch(waitForEvent(a.eventsCh), runCmd)
 }

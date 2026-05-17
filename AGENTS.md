@@ -25,16 +25,21 @@ main.go
 Runtime rule:
 
 ```text
-CurrentState + Event -> NextState / Mutations / Effects
+Effect executed → ExecutionResult → resolveResult (pure function) → raw Event
+  → Policy.Reclassify → classified Event → Transition(state, event)
+  → TransitionResult { NextState, Mutations, Effects } → applyMutation → runEffects
 ```
+
+Transition table (events shown after Policy reclassification):
 
 - `State`: current runtime phase.
 - `Event`: fact that triggers a transition.
 - `Mutation`: synchronous internal state change.
 - `Effect`: work requested by a transition, such as model calls, tool execution, or internal tool-queue processing.
-- `Transition`: pure state-machine decision.
-- `Engine`: owns state, applies mutations, executes effects through `EffectExecutor`.
-- `Session`: channel boundary for UI events and approvals.
+- `Transition`: pure state-machine decision. All state changes go through Transition → Mutation — no other code touches engine state directly.
+- `Policy`: approval rules. Receives raw events (`ToolCallsReceived`, `NextToolCallAvailable`) and reclassifies them into approval-gated events (`ToolCallsBlockedForApproval`, `ToolCallsApprovedToRun`, etc.). Moves risk-checking, always-allow, and yolo logic out of Engine.
+- `Engine`: scheduler. Receives events, calls Transition, applies mutations, executes effects. Does not own approval logic — that belongs to Policy.
+- `Session`: channel boundary for UI events and approvals. Runs one turn (`RunTurn`) per user input, guarded against concurrent calls.
 
 | State | Event | Next | Mutations | Effects |
 |---|---|---|---|---|

@@ -39,7 +39,7 @@ func runSession(t *testing.T, engine *Engine, content string) {
 	session := NewSession(engine)
 	events := make(chan SessionEvent, 20)
 	approvals := make(chan ApprovalDecision, 1)
-	if err := session.Run(context.Background(), content, events, approvals); err != nil {
+	if err := session.RunTurn(context.Background(), content, events, approvals); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 	for range events {
@@ -180,7 +180,7 @@ func TestQueuedRiskyToolWaitsForApproval(t *testing.T) {
 	approvals := make(chan ApprovalDecision, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Run(context.Background(), "use tools", events, approvals)
+		done <- session.RunTurn(context.Background(), "use tools", events, approvals)
 	}()
 
 	waitForApproval(t, events, approvals, func() {
@@ -242,7 +242,7 @@ func TestRiskyToolWaitsForShortcutApproval(t *testing.T) {
 	approvals := make(chan ApprovalDecision, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Run(context.Background(), "danger", events, approvals)
+		done <- session.RunTurn(context.Background(), "danger", events, approvals)
 	}()
 	waitForApproval(t, events, approvals, func() {
 		if engine.State() != StateWaitingApproval {
@@ -291,7 +291,7 @@ func TestToolRiskComesFromToolSpec(t *testing.T) {
 	approvals := make(chan ApprovalDecision, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Run(context.Background(), "danger", events, approvals)
+		done <- session.RunTurn(context.Background(), "danger", events, approvals)
 	}()
 
 	waitForApproval(t, events, approvals, func() {
@@ -413,7 +413,7 @@ func TestCancelClearsPendingToolAndEffects(t *testing.T) {
 	approvals := make(chan ApprovalDecision, 1)
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Run(ctx, "danger", events, approvals)
+		done <- session.RunTurn(ctx, "danger", events, approvals)
 	}()
 	waitForApproval(t, events, approvals, nil)
 	if engine.State() != StateWaitingApproval {
@@ -460,7 +460,7 @@ func TestSessionRunStartsAndFinishesRun(t *testing.T) {
 	events := make(chan SessionEvent, 10)
 	approvals := make(chan ApprovalDecision, 1)
 
-	if err := session.Run(context.Background(), "hi", events, approvals); err != nil {
+	if err := session.RunTurn(context.Background(), "hi", events, approvals); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 	for range events {
@@ -480,7 +480,7 @@ func TestSessionRunEmitsStateAndFinalMessage(t *testing.T) {
 	events := make(chan SessionEvent, 10)
 	approvals := make(chan ApprovalDecision, 1)
 
-	if err := session.Run(context.Background(), "hi", events, approvals); err != nil {
+	if err := session.RunTurn(context.Background(), "hi", events, approvals); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -515,7 +515,7 @@ func TestSessionRunEmitsEachAppendedMessageOnce(t *testing.T) {
 	events := make(chan SessionEvent, 10)
 	approvals := make(chan ApprovalDecision, 1)
 
-	if err := session.Run(context.Background(), "hi", events, approvals); err != nil {
+	if err := session.RunTurn(context.Background(), "hi", events, approvals); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -554,7 +554,7 @@ func TestSessionRunWaitsForApprovalChannel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Run(context.Background(), "run bash", events, approvals)
+		done <- session.RunTurn(context.Background(), "run bash", events, approvals)
 	}()
 
 	var sawApproval bool
@@ -596,7 +596,7 @@ func TestApproveAlwaysIsScopedToToolNameAndInput(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- session.Run(context.Background(), "run tools", events, approvals)
+		done <- session.RunTurn(context.Background(), "run tools", events, approvals)
 	}()
 
 	approvalCount := 0
