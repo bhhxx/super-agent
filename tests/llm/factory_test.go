@@ -11,7 +11,7 @@ import (
 type fakeModel struct{}
 
 func (fakeModel) Next(context.Context, []runtime.Message, []runtime.ToolSpec, func(runtime.StreamChunk)) (runtime.ModelResponse, error) {
-	return runtime.ModelResponse{FinalAnswer: "ok"}, nil
+	return runtime.ModelResponse{Content: "ok"}, nil
 }
 
 func TestModelRegistryCreatesRegisteredProvider(t *testing.T) {

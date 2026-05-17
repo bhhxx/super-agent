@@ -11,7 +11,7 @@ func TestLoadConfigCombinesFlagsAndEnv(t *testing.T) {
 		"LLM_PROVIDER": "claude",
 		"NO_TOOLS":     "true",
 	}
-	cfg := LoadConfig(Flags{YOLO: true}, lookup(env))
+	cfg := LoadConfig(Flags{AutoApproveTools: true}, lookup(env))
 
 	if cfg.Provider != "claude" {
 		t.Fatalf("provider = %q, want claude", cfg.Provider)
@@ -19,8 +19,8 @@ func TestLoadConfigCombinesFlagsAndEnv(t *testing.T) {
 	if !cfg.NoTools {
 		t.Fatal("NoTools = false, want true")
 	}
-	if !cfg.YOLO {
-		t.Fatal("YOLO = false, want true")
+	if !cfg.AutoApproveTools {
+		t.Fatal("AutoApproveTools = false, want true")
 	}
 }
 

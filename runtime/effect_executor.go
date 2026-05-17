@@ -5,15 +5,13 @@ import (
 	"errors"
 )
 
-type EffectContext struct {
-	Messages       []Message
-	ToolSpecs      []ToolSpec
-	NeedsApproval  func(ToolCall) bool
-	NextQueuedTool func() (*ToolCall, bool)
+type ExecutionInput struct {
+	Messages  []Message
+	ToolSpecs []ToolSpec
 }
 
 type EffectExecutor interface {
-	Execute(ctx context.Context, effect Effect, env EffectContext, chunkFunc func(StreamChunk)) (Event, error)
+	Execute(ctx context.Context, effect Effect, env ExecutionInput, chunkFunc func(StreamChunk)) (ExecutionResult, error)
 }
 
 type DefaultEffectExecutor struct {
@@ -29,43 +27,26 @@ func (x *DefaultEffectExecutor) ToolSpecs() []ToolSpec {
 	return x.tools.Specs()
 }
 
-func (x *DefaultEffectExecutor) Execute(ctx context.Context, effect Effect, env EffectContext, chunkFunc func(StreamChunk)) (Event, error) {
+func (x *DefaultEffectExecutor) Execute(ctx context.Context, effect Effect, env ExecutionInput, chunkFunc func(StreamChunk)) (ExecutionResult, error) {
 	switch fx := effect.(type) {
 	case CallModel:
 		resp, err := x.model.Next(ctx, env.Messages, env.ToolSpecs, chunkFunc)
 		if err != nil {
 			return nil, err
 		}
-		calls := responseToolCalls(resp)
-		if len(calls) > 0 {
-			return ToolCallsRequested{
-				FinalAnswer:      resp.FinalAnswer,
-				Calls:            calls,
-				ReasoningContent: resp.ReasoningContent,
-				NeedsApproval:    env.NeedsApproval != nil && env.NeedsApproval(calls[0]),
-			}, nil
-		}
-		return AssistantMessageReceived{Response: resp}, nil
+		return ModelReplied{Response: resp}, nil
 	case RunTool:
 		result, err := x.tools.Run(ctx, fx.Call)
 		if err != nil {
-			return nil, err
+			if errors.Is(err, context.Canceled) {
+				return nil, err
+			}
+			return ToolFinished{Call: fx.Call, Result: "Error: " + err.Error()}, nil
 		}
-		next, ok := nextQueuedTool(env)
-		return ToolResultReceived{
-			Call:              fx.Call,
-			Result:            result,
-			NextCall:          next,
-			NextNeedsApproval: ok && env.NeedsApproval != nil && env.NeedsApproval(*next),
-		}, nil
+		return ToolFinished{Call: fx.Call, Result: result}, nil
+	case ProcessNextToolCall:
+		return ToolQueueChecked{}, nil
 	default:
 		return nil, errors.New("unknown effect")
 	}
-}
-
-func nextQueuedTool(env EffectContext) (*ToolCall, bool) {
-	if env.NextQueuedTool == nil {
-		return nil, false
-	}
-	return env.NextQueuedTool()
 }

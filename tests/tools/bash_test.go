@@ -24,7 +24,7 @@ func (t *fakeTool) Run(_ context.Context, call runtime.ToolCall) (string, error)
 }
 
 func TestBashToolsExposeRiskyBashTool(t *testing.T) {
-	specs := NewBashTools().Specs()
+	specs := NewRegistry(BashTool{}).Specs()
 	for _, spec := range specs {
 		if spec.Name == "bash" {
 			if !spec.Risky {
@@ -37,7 +37,7 @@ func TestBashToolsExposeRiskyBashTool(t *testing.T) {
 }
 
 func TestBashToolsExposeOnlyBashTool(t *testing.T) {
-	specs := NewBashTools().Specs()
+	specs := NewRegistry(BashTool{}).Specs()
 	if len(specs) != 1 {
 		t.Fatalf("specs = %+v, want only bash", specs)
 	}
@@ -47,7 +47,7 @@ func TestBashToolsExposeOnlyBashTool(t *testing.T) {
 }
 
 func TestBashToolsRunCommand(t *testing.T) {
-	got, err := NewBashTools().Run(context.Background(), runtime.ToolCall{
+	got, err := NewRegistry(BashTool{}).Run(context.Background(), runtime.ToolCall{
 		Name:  "bash",
 		Input: `{"command":"printf hello"}`,
 	})
@@ -60,7 +60,7 @@ func TestBashToolsRunCommand(t *testing.T) {
 }
 
 func TestBashToolsReturnsFailedCommandOutputWithoutError(t *testing.T) {
-	got, err := NewBashTools().Run(context.Background(), runtime.ToolCall{
+	got, err := NewRegistry(BashTool{}).Run(context.Background(), runtime.ToolCall{
 		Name:  "bash",
 		Input: `{"command":"printf before; exit 7"}`,
 	})

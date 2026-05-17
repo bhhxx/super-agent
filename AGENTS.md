@@ -1,23 +1,67 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Project Architecture
 
-This is a Go agent runtime built around a state-machine model. `main.go` wires flags, `.env` loading, the LLM provider, tools, runtime engine, and Bubble Tea TUI.
+This is a Go agent runtime with a state-machine core, provider adapters, local tools, and a Bubble Tea TUI.
 
-- `runtime/`: state, events, mutations, effects, transitions, and engine orchestration.
-- `llm/`: provider adapters for DeepSeek, OpenAI, and Claude.
-- `tools/`: local tool runners, including bash and no-tool mode.
-- `tui/`: Bubble Tea application and prompt/approval UI.
-- `tests/`: package-oriented tests under `tests/runtime`, `tests/llm`, `tests/tools`, and `tests/tui`.
-- `arch.md`: source note for the runtime state-machine design.
+```text
+main.go
+  -> app.LoadConfig
+  -> app.NewSession
+       -> llm.NewModel
+       -> tools.NewRegistry / tools.NoTools
+       -> runtime.NewEngine
+       -> runtime.NewSession
+  -> tui.New(session)
+```
+
+- `app/`: config and session assembly.
+- `runtime/`: state, events, mutations, effects, transitions, engine, session boundary.
+- `llm/`: DeepSeek, OpenAI, Claude adapters.
+- `tools/`: bash runner, registry, no-tool mode.
+- `tui/`: Bubble Tea event loop and approval UI.
+- `tests/`: external package tests by module.
+
+Runtime rule:
+
+```text
+CurrentState + Event -> NextState / Mutations / Effects
+```
+
+- `State`: current runtime phase.
+- `Event`: fact that triggers a transition.
+- `Mutation`: synchronous internal state change.
+- `Effect`: work requested by a transition, such as model calls, tool execution, or internal tool-queue processing.
+- `Transition`: pure state-machine decision.
+- `Engine`: owns state, applies mutations, executes effects through `EffectExecutor`.
+- `Session`: channel boundary for UI events and approvals.
+
+| State | Event | Next | Mutations | Effects |
+|---|---|---|---|---|
+| Initializing | EngineReady | Idle | - | - |
+| Idle | UserMessageSubmitted | WaitingLLM | AppendUserMessage | CallModel |
+| WaitingLLM | AssistantMessageReceived | Idle | AppendAssistantMessage | - |
+| WaitingLLM | ToolCallsBlockedForApproval | WaitingApproval | AppendAssistantMessage, SetQueuedToolCalls, SetPendingTool | - |
+| WaitingLLM | ToolCallsApprovedToRun | RunningTool | AppendAssistantMessage, SetQueuedToolCalls | RunTool |
+| WaitingApproval | ApprovalGranted | RunningTool | ClearPendingTool | RunTool |
+| WaitingApproval | ApprovalAlwaysGranted | RunningTool | ClearPendingTool, AddAlwaysAllow | RunTool |
+| WaitingApproval | ApprovalDenied | AdvancingQueue | ClearPendingTool, AppendToolResult | ProcessNextToolCall |
+| RunningTool | ToolResultReceived | AdvancingQueue | AppendToolResult | ProcessNextToolCall |
+| AdvancingQueue | NoMoreToolCalls | WaitingLLM | - | CallModel |
+| AdvancingQueue | NextToolCallNeedsApproval | WaitingApproval | SetPendingTool, PopQueuedToolCall | - |
+| AdvancingQueue | NextToolCallReadyToRun | RunningTool | PopQueuedToolCall | RunTool |
+| any | ErrorOccurred | Idle | ClearPendingTool, ClearQueuedToolCalls, ClearPendingEffects | - |
+| any | CancelRequested | Idle | ClearPendingTool, ClearQueuedToolCalls, ClearPendingEffects | - |
+| any | ResetRequested | Idle | ResetContext | - |
+| any | AutoApproveToolsRequested | same | SetAutoApproveTools | - |
 
 ## Build, Test, and Development Commands
 
 - `go run .`: run the TUI with the default provider, DeepSeek.
 - `go run . --no-tools`: run without tool calling.
-- `go run . --yolo`: allow autonomous tool execution.
+- `go run . --yolo`: auto-approve tool execution.
 - `NO_TOOLS=true go run .`: disable tools through environment config.
-- `YOLO=true go run .`: enable YOLO mode through environment config.
+- `YOLO=true go run .`: auto-approve tools through environment config.
 - `go test ./...`: run all tests.
 - `gofmt -w <files>`: format changed Go files before committing.
 

@@ -45,5 +45,7 @@ func NewDefaultModelRegistry() *ModelRegistry {
 }
 
 func NewModel(provider string) (runtime.Model, error) {
-	return NewDefaultModelRegistry().New(provider)
+	return defaultRegistry.New(provider)
 }
+
+var defaultRegistry = NewDefaultModelRegistry()

@@ -68,8 +68,8 @@ func TestOpenAIModelSendsChatCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	if resp.FinalAnswer != "hello from llm" {
-		t.Fatalf("FinalAnswer = %q", resp.FinalAnswer)
+	if resp.Content != "hello from llm" {
+		t.Fatalf("Content = %q", resp.Content)
 	}
 	if requestBody.Model != "test-model" {
 		t.Fatalf("request model = %q", requestBody.Model)
@@ -113,8 +113,8 @@ func TestOpenAIModelUsesSDKDefaultBaseURLWhenConfigBaseURLIsEmpty(t *testing.T) 
 	if !sawDefaultBaseURL {
 		t.Fatal("request did not use OpenAI SDK default base URL")
 	}
-	if resp.FinalAnswer != "ok" {
-		t.Fatalf("FinalAnswer = %q, want ok", resp.FinalAnswer)
+	if resp.Content != "ok" {
+		t.Fatalf("Content = %q, want ok", resp.Content)
 	}
 }
 
@@ -168,7 +168,7 @@ func unsetEnv(t *testing.T, key string) {
 	})
 }
 
-func TestOpenAIModelMarksRiskyToolCalls(t *testing.T) {
+func TestOpenAIModelLeavesToolRiskToRuntime(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"id\": \"chatcmpl-test\", \"object\": \"chat.completion.chunk\", \"created\": 1, \"model\": \"test-model\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"content\": \"\", \"tool_calls\": [{\"index\": 0, \"id\": \"call_1\", \"type\": \"function\", \"function\": {\"name\": \"bash\", \"arguments\": \"{\\\"command\\\":\\\"ls\\\"}\"}}]}, \"finish_reason\": \"tool_calls\"}]}\n\ndata: [DONE]\n\n"))
@@ -182,7 +182,7 @@ func TestOpenAIModelMarksRiskyToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "bash" || !resp.ToolCalls[0].Risky {
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "bash" || resp.ToolCalls[0].Risky {
 		t.Fatalf("ToolCalls = %+v", resp.ToolCalls)
 	}
 }
@@ -207,7 +207,7 @@ func TestOpenAIModelReturnsAllToolCalls(t *testing.T) {
 	if resp.ToolCalls[0].Name != "first" || resp.ToolCalls[1].Name != "second" {
 		t.Fatalf("ToolCalls = %+v, want first then second", resp.ToolCalls)
 	}
-	if !resp.ToolCalls[1].Risky {
-		t.Fatalf("second call was not marked risky: %+v", resp.ToolCalls[1])
+	if resp.ToolCalls[1].Risky {
+		t.Fatalf("provider marked risk instead of runtime: %+v", resp.ToolCalls[1])
 	}
 }

@@ -4,6 +4,26 @@ type Mutation interface {
 	isMutation()
 }
 
+// AllMutations lists every Mutation type
+var AllMutations = []Mutation{
+	AppendUserMessage{},
+	AppendAssistantMessage{},
+	AppendToolResult{},
+	SetPendingTool{},
+	SetQueuedToolCalls{},
+	ClearPendingTool{},
+	ClearPendingEffects{},
+	ClearQueuedToolCalls{},
+	PopQueuedToolCall{},
+	ResetContext{},
+	AddAlwaysAllow{},
+	SetAutoApproveTools{},
+}
+
+type PopQueuedToolCall struct{}
+
+func (PopQueuedToolCall) isMutation() {}
+
 type AppendUserMessage struct {
 	Content string
 }
@@ -29,11 +49,11 @@ type SetPendingTool struct {
 
 func (SetPendingTool) isMutation() {}
 
-type SetPendingToolQueue struct {
+type SetQueuedToolCalls struct {
 	Calls []ToolCall
 }
 
-func (SetPendingToolQueue) isMutation() {}
+func (SetQueuedToolCalls) isMutation() {}
 
 type ClearPendingTool struct{}
 
@@ -43,10 +63,22 @@ type ClearPendingEffects struct{}
 
 func (ClearPendingEffects) isMutation() {}
 
-type ClearPendingToolQueue struct{}
+type ClearQueuedToolCalls struct{}
 
-func (ClearPendingToolQueue) isMutation() {}
+func (ClearQueuedToolCalls) isMutation() {}
 
 type ResetContext struct{}
 
 func (ResetContext) isMutation() {}
+
+type AddAlwaysAllow struct {
+	Key string
+}
+
+func (AddAlwaysAllow) isMutation() {}
+
+type SetAutoApproveTools struct {
+	Enabled bool
+}
+
+func (SetAutoApproveTools) isMutation() {}

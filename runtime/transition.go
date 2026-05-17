@@ -2,122 +2,183 @@ package runtime
 
 import "errors"
 
-type Decision struct {
+type TransitionResult struct {
 	NextState State
 	Mutations []Mutation
 	Effects   []Effect
 }
 
-func Transition(state State, event Event) (Decision, error) {
+func toolCallKey(call ToolCall) string {
+	return call.Name + "\x00" + call.Input
+}
+
+func Transition(state State, event Event) (TransitionResult, error) {
 	switch ev := event.(type) {
 	case UserMessageSubmitted:
 		if state != StateIdle {
-			return Decision{}, errors.New("runtime is not idle")
+			return TransitionResult{}, errors.New("runtime is not idle")
 		}
-		return Decision{
+		return TransitionResult{
 			NextState: StateWaitingLLM,
 			Mutations: []Mutation{AppendUserMessage{Content: ev.Content}},
 			Effects:   []Effect{CallModel{}},
 		}, nil
 	case AssistantMessageReceived:
 		if state != StateWaitingLLM {
-			return Decision{}, errors.New("runtime is not waiting for llm")
+			return TransitionResult{}, errors.New("runtime is not waiting for llm")
 		}
-		return Decision{
+		return TransitionResult{
 			NextState: StateIdle,
 			Mutations: []Mutation{AppendAssistantMessage{Message: Message{
 				Role:             RoleAssistant,
-				Content:          ev.Response.FinalAnswer,
+				Content:          ev.Response.Content,
 				ReasoningContent: ev.Response.ReasoningContent,
 			}}},
 		}, nil
-	case ToolCallsRequested:
+	case ToolCallsBlockedForApproval:
 		if state != StateWaitingLLM {
-			return Decision{}, errors.New("runtime is not waiting for llm")
-		}
-		if len(ev.Calls) == 0 {
-			return Decision{}, errors.New("tool call list is empty")
+			return TransitionResult{}, errors.New("runtime is not waiting for llm")
 		}
 		toolCalls := make([]*ToolCall, 0, len(ev.Calls))
 		for i := range ev.Calls {
 			call := ev.Calls[i]
 			toolCalls = append(toolCalls, &call)
 		}
-		message := Message{
-			Role:             RoleAssistant,
-			Content:          ev.FinalAnswer,
-			ReasoningContent: ev.ReasoningContent,
-			ToolCalls:        toolCalls,
+		return TransitionResult{
+			NextState: StateWaitingApproval,
+			Mutations: []Mutation{
+				AppendAssistantMessage{Message: Message{
+					Role:             RoleAssistant,
+					Content:          ev.Content,
+					ReasoningContent: ev.ReasoningContent,
+					ToolCalls:        toolCalls,
+				}},
+				SetQueuedToolCalls{Calls: ev.Calls[1:]},
+				SetPendingTool{Call: ev.Calls[0]},
+			},
+		}, nil
+	case ToolCallsApprovedToRun:
+		if state != StateWaitingLLM {
+			return TransitionResult{}, errors.New("runtime is not waiting for llm")
 		}
-		mutations := []Mutation{
-			AppendAssistantMessage{Message: message},
-			SetPendingToolQueue{Calls: ev.Calls[1:]},
+		toolCalls := make([]*ToolCall, 0, len(ev.Calls))
+		for i := range ev.Calls {
+			call := ev.Calls[i]
+			toolCalls = append(toolCalls, &call)
 		}
-		firstCall := ev.Calls[0]
-		if ev.NeedsApproval {
-			mutations = append(mutations, SetPendingTool{Call: firstCall})
-			return Decision{NextState: StateWaitingApproval, Mutations: mutations}, nil
-		}
-		return Decision{NextState: StateRunningTool, Mutations: mutations, Effects: []Effect{RunTool{Call: firstCall}}}, nil
+		return TransitionResult{
+			NextState: StateRunningTool,
+			Mutations: []Mutation{
+				AppendAssistantMessage{Message: Message{
+					Role:             RoleAssistant,
+					Content:          ev.Content,
+					ReasoningContent: ev.ReasoningContent,
+					ToolCalls:        toolCalls,
+				}},
+				SetQueuedToolCalls{Calls: ev.Calls[1:]},
+			},
+			Effects: []Effect{RunTool{Call: ev.Calls[0]}},
+		}, nil
 	case ApprovalGranted:
 		if state != StateWaitingApproval {
-			return Decision{}, errors.New("no tool is waiting for approval")
+			return TransitionResult{}, errors.New("no tool is waiting for approval")
 		}
-		return Decision{
+		return TransitionResult{
 			NextState: StateRunningTool,
 			Mutations: []Mutation{ClearPendingTool{}},
 			Effects:   []Effect{RunTool{Call: ev.Call}},
 		}, nil
+	case ApprovalAlwaysGranted:
+		if state != StateWaitingApproval {
+			return TransitionResult{}, errors.New("no tool is waiting for approval")
+		}
+		return TransitionResult{
+			NextState: StateRunningTool,
+			Mutations: []Mutation{ClearPendingTool{}, AddAlwaysAllow{Key: toolCallKey(ev.Call)}},
+			Effects:   []Effect{RunTool{Call: ev.Call}},
+		}, nil
 	case ApprovalDenied:
 		if state != StateWaitingApproval {
-			return Decision{}, errors.New("no tool is waiting for approval")
+			return TransitionResult{}, errors.New("no tool is waiting for approval")
 		}
-		mutations := []Mutation{
-			ClearPendingTool{},
-			AppendToolResult{Call: ev.Call, Result: "denied: " + ev.Call.Name},
-		}
-		if ev.NextCall != nil {
-			if ev.NextNeedsApproval {
-				mutations = append(mutations, SetPendingTool{Call: *ev.NextCall})
-				return Decision{NextState: StateWaitingApproval, Mutations: mutations}, nil
-			}
-			return Decision{NextState: StateRunningTool, Mutations: mutations, Effects: []Effect{RunTool{Call: *ev.NextCall}}}, nil
-		}
-		return Decision{NextState: StateWaitingLLM, Mutations: mutations, Effects: []Effect{CallModel{}}}, nil
+		return TransitionResult{
+			NextState: StateAdvancingQueue,
+			Mutations: []Mutation{
+				ClearPendingTool{},
+				AppendToolResult{Call: ev.Call, Result: "denied: " + ev.Call.Name},
+			},
+			Effects: []Effect{ProcessNextToolCall{}},
+		}, nil
 	case ToolResultReceived:
 		if state != StateRunningTool {
-			return Decision{}, errors.New("runtime is not waiting for tool result")
+			return TransitionResult{}, errors.New("runtime is not waiting for tool result")
 		}
-		mutations := []Mutation{AppendToolResult{Call: ev.Call, Result: ev.Result}}
-		if ev.NextCall != nil {
-			if ev.NextNeedsApproval {
-				mutations = append(mutations, SetPendingTool{Call: *ev.NextCall})
-				return Decision{NextState: StateWaitingApproval, Mutations: mutations}, nil
-			}
-			return Decision{NextState: StateRunningTool, Mutations: mutations, Effects: []Effect{RunTool{Call: *ev.NextCall}}}, nil
+		return TransitionResult{
+			NextState: StateAdvancingQueue,
+			Mutations: []Mutation{
+				AppendToolResult{Call: ev.Call, Result: ev.Result},
+			},
+			Effects: []Effect{ProcessNextToolCall{}},
+		}, nil
+	case NoMoreToolCalls:
+		if state != StateAdvancingQueue {
+			return TransitionResult{}, errors.New("invalid state for no more tool calls")
 		}
-		return Decision{NextState: StateWaitingLLM, Mutations: mutations, Effects: []Effect{CallModel{}}}, nil
+		return TransitionResult{
+			NextState: StateWaitingLLM,
+			Effects:   []Effect{CallModel{}},
+		}, nil
+	case NextToolCallNeedsApproval:
+		if state != StateAdvancingQueue {
+			return TransitionResult{}, errors.New("invalid state for next tool call")
+		}
+		return TransitionResult{
+			NextState: StateWaitingApproval,
+			Mutations: []Mutation{
+				SetPendingTool{Call: ev.Call},
+				PopQueuedToolCall{},
+			},
+		}, nil
+	case NextToolCallReadyToRun:
+		if state != StateAdvancingQueue {
+			return TransitionResult{}, errors.New("invalid state for next tool call")
+		}
+		return TransitionResult{
+			NextState: StateRunningTool,
+			Mutations: []Mutation{PopQueuedToolCall{}},
+			Effects:   []Effect{RunTool{Call: ev.Call}},
+		}, nil
 	case ErrorOccurred:
-		return Decision{
+		return TransitionResult{
 			NextState: StateIdle,
 			Mutations: []Mutation{
 				ClearPendingTool{},
-				ClearPendingToolQueue{},
+				ClearQueuedToolCalls{},
 				ClearPendingEffects{},
 			},
 		}, nil
 	case CancelRequested:
-		return Decision{
+		return TransitionResult{
 			NextState: StateIdle,
 			Mutations: []Mutation{
 				ClearPendingTool{},
-				ClearPendingToolQueue{},
+				ClearQueuedToolCalls{},
 				ClearPendingEffects{},
 			},
 		}, nil
+	case EngineReady:
+		if state != StateInitializing {
+			return TransitionResult{}, errors.New("runtime is not initializing")
+		}
+		return TransitionResult{NextState: StateIdle}, nil
+	case AutoApproveToolsRequested:
+		return TransitionResult{
+			NextState: state,
+			Mutations: []Mutation{SetAutoApproveTools{Enabled: ev.Enabled}},
+		}, nil
 	case ResetRequested:
-		return Decision{NextState: StateIdle, Mutations: []Mutation{ResetContext{}}}, nil
+		return TransitionResult{NextState: StateIdle, Mutations: []Mutation{ResetContext{}}}, nil
 	default:
-		return Decision{}, errors.New("unknown event")
+		return TransitionResult{}, errors.New("unknown event")
 	}
 }

@@ -5,12 +5,12 @@ import (
 	"errors"
 )
 
-type ConfirmationAction string
+type ApprovalDecision string
 
 const (
-	ConfirmOnce   ConfirmationAction = "once"
-	ConfirmAlways ConfirmationAction = "always"
-	ConfirmDeny   ConfirmationAction = "deny"
+	ApproveOnce   ApprovalDecision = "once"
+	ApproveAlways ApprovalDecision = "always"
+	DenyApproval  ApprovalDecision = "deny"
 )
 
 type SessionEvent interface {
@@ -51,22 +51,23 @@ type Snapshot struct {
 	State       State
 	Messages    []Message
 	PendingTool *ToolCall
+	IsBusy      bool
+	NeedsInput  bool
 }
 
 type Session struct {
-	engine *Engine
+	engine  *Engine
+	emitter *snapshotEmitter
 }
 
 func NewSession(engine *Engine) *Session {
-	return &Session{engine: engine}
+	return &Session{engine: engine, emitter: newSnapshotEmitter()}
 }
 
-func (s *Session) Run(ctx context.Context, query string, events chan<- SessionEvent, approvals <-chan ConfirmationAction) error {
+func (s *Session) Run(ctx context.Context, query string, events chan<- SessionEvent, approvals <-chan ApprovalDecision) error {
 	defer close(events)
-	emittedMessages := 0
-	var emittedApproval *ToolCall
-	err := s.drainRun(ctx, events, approvals, query, &emittedMessages, &emittedApproval)
-	s.emitSnapshot(events, &emittedMessages, &emittedApproval)
+	err := s.drainRun(ctx, events, approvals, query)
+	s.emitter.emit(events, s.Snapshot())
 	return err
 }
 
@@ -82,48 +83,25 @@ func (s *Session) Snapshot() Snapshot {
 	return s.engine.snapshot()
 }
 
-func (s *Session) emitSnapshot(events chan<- SessionEvent, emittedMessages *int, emittedApproval **ToolCall) {
-	snapshot := s.Snapshot()
-	events <- StateChanged{State: snapshot.State}
-	if snapshot.PendingTool != nil {
-		if emittedApproval == nil || *emittedApproval == nil || **emittedApproval != *snapshot.PendingTool {
-			events <- ToolApprovalRequested{ToolCall: *snapshot.PendingTool}
-			if emittedApproval != nil {
-				call := *snapshot.PendingTool
-				*emittedApproval = &call
-			}
-		}
-	} else if emittedApproval != nil {
-		*emittedApproval = nil
-	}
-	messages := snapshot.Messages
-	if emittedMessages == nil {
-		return
-	}
-	if *emittedMessages > len(messages) {
-		*emittedMessages = 0
-	}
-	for _, msg := range messages[*emittedMessages:] {
-		events <- MessageAppended{Message: msg}
-	}
-	*emittedMessages = len(messages)
+func (s *Session) emitSnapshot(events chan<- SessionEvent) {
+	s.emitter.emit(events, s.Snapshot())
 }
 
-func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, approvals <-chan ConfirmationAction, query string, emittedMessages *int, emittedApproval **ToolCall) error {
+func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, approvals <-chan ApprovalDecision, query string) error {
 	chunkFunc := func(chunk StreamChunk) {
 		events <- StreamChunkReceived{Chunk: chunk}
 	}
-	if err := s.engine.runEventWithBeforeEffects(ctx, UserMessageSubmitted{Content: query}, chunkFunc, func() {
-		s.emitSnapshot(events, emittedMessages, emittedApproval)
+	if err := s.engine.dispatchEventThenRunEffects(ctx, UserMessageSubmitted{Content: query}, chunkFunc, func() {
+		s.emitSnapshot(events)
 	}); err != nil {
 		events <- SessionError{Err: err}
 		return err
 	}
-	s.emitSnapshot(events, emittedMessages, emittedApproval)
+	s.emitSnapshot(events)
 	for {
 		switch s.engine.State() {
 		case StateWaitingApproval:
-			s.emitSnapshot(events, emittedMessages, emittedApproval)
+			s.emitSnapshot(events)
 			action, err := waitApproval(ctx, approvals)
 			if err != nil {
 				events <- SessionError{Err: err}
@@ -133,7 +111,7 @@ func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, appr
 				events <- SessionError{Err: err}
 				return err
 			}
-			s.emitSnapshot(events, emittedMessages, emittedApproval)
+			s.emitSnapshot(events)
 		case StateIdle:
 			return nil
 		default:
@@ -142,7 +120,7 @@ func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, appr
 	}
 }
 
-func waitApproval(ctx context.Context, approvals <-chan ConfirmationAction) (ConfirmationAction, error) {
+func waitApproval(ctx context.Context, approvals <-chan ApprovalDecision) (ApprovalDecision, error) {
 	select {
 	case <-ctx.Done():
 		return "", ctx.Err()
@@ -151,15 +129,15 @@ func waitApproval(ctx context.Context, approvals <-chan ConfirmationAction) (Con
 	}
 }
 
-func (s *Session) applyApproval(ctx context.Context, action ConfirmationAction, chunkFunc func(StreamChunk)) error {
+func (s *Session) applyApproval(ctx context.Context, action ApprovalDecision, chunkFunc func(StreamChunk)) error {
 	switch action {
-	case ConfirmOnce:
+	case ApproveOnce:
 		return s.engine.Approve(ctx, chunkFunc)
-	case ConfirmAlways:
+	case ApproveAlways:
 		return s.engine.ApproveAlways(ctx, chunkFunc)
-	case ConfirmDeny:
+	case DenyApproval:
 		return s.engine.Deny(ctx, chunkFunc)
 	default:
-		return errors.New("unknown confirmation action")
+		return errors.New("unknown approval decision")
 	}
 }

@@ -92,17 +92,17 @@ type App struct {
 	showHelp        bool
 	err             string
 	status          string
-	lastCmd         string
+	lastActivity    string
 	cancel          context.CancelFunc
 	eventsCh        chan runtime.SessionEvent
-	approvalsCh     chan runtime.ConfirmationAction
+	approvalsCh     chan runtime.ApprovalDecision
 	streamContent   string
 	streamReasoning string
 }
 
 type Conversation interface {
 	Snapshot() runtime.Snapshot
-	Run(context.Context, string, chan<- runtime.SessionEvent, <-chan runtime.ConfirmationAction) error
+	Run(context.Context, string, chan<- runtime.SessionEvent, <-chan runtime.ApprovalDecision) error
 	Cancel() error
 	Reset()
 }
@@ -147,7 +147,7 @@ func New(session Conversation) App {
 		styles:      styles,
 		history:     []string{},
 		eventsCh:    make(chan runtime.SessionEvent, 100),
-		approvalsCh: make(chan runtime.ConfirmationAction, 1),
+		approvalsCh: make(chan runtime.ApprovalDecision, 1),
 	}
 }
 
@@ -162,20 +162,17 @@ func (a App) Init() tea.Cmd {
 func (a App) headerView() string {
 	var icon string
 	snapshot := a.session.Snapshot()
-	state := snapshot.State
-	switch state {
-	case runtime.StateWaitingLLM:
+	switch {
+	case snapshot.IsBusy:
 		icon = a.spinner.View()
-	case runtime.StateWaitingApproval:
+	case snapshot.NeedsInput:
 		icon = "✋"
-	case runtime.StateRunningTool:
-		icon = a.spinner.View()
 	default:
 		icon = "◇"
 	}
 
 	title := a.styles.Header.Render(" SUPER AGENT ")
-	status := a.styles.Status.Render(fmt.Sprintf(" %s %s", icon, state))
+	status := a.styles.Status.Render(fmt.Sprintf(" %s %s", icon, snapshot.State))
 
 	header := title + status
 	version := a.styles.Version.Width(a.width - lipgloss.Width(header)).Render("v0.1.0")
@@ -193,8 +190,8 @@ func (a App) footerView() string {
 		b.WriteString(a.styles.Status.Render(" "+a.status) + "\n")
 	}
 
-	if a.lastCmd != "" {
-		b.WriteString(a.styles.Footer.Render(" Last: "+a.lastCmd) + "\n")
+	if a.lastActivity != "" {
+		b.WriteString(a.styles.Footer.Render(" Last: "+a.lastActivity) + "\n")
 	}
 
 	if call := a.session.Snapshot().PendingTool; call != nil {
@@ -248,7 +245,7 @@ func (a App) contentString() string {
 
 	snapshot := a.session.Snapshot()
 	messages := snapshot.Messages
-	for i, msg := range messages {
+	for _, msg := range messages {
 		var msgBlock strings.Builder
 
 		role := strings.ToUpper(string(msg.Role))
@@ -258,21 +255,7 @@ func (a App) contentString() string {
 		case "assistant":
 			msgBlock.WriteString(a.styles.AgentLabel.Render(role) + "\n")
 		case "tool":
-			toolName := "unknown"
-			for j := i - 1; j >= 0; j-- {
-				if messages[j].Role == "assistant" {
-					for _, tc := range messages[j].ToolCalls {
-						if tc.ID == msg.ToolCallID {
-							toolName = tc.Name
-							break
-						}
-					}
-					if toolName != "unknown" {
-						break
-					}
-				}
-			}
-			msgBlock.WriteString(a.styles.ToolLabel.Render(fmt.Sprintf("%s (%s)", role, toolName)) + "\n")
+			msgBlock.WriteString(a.styles.ToolLabel.Render(fmt.Sprintf("%s (%s)", role, msg.ToolName)) + "\n")
 		default:
 			msgBlock.WriteString(lipgloss.NewStyle().Bold(true).Render(role) + "\n")
 		}
@@ -306,7 +289,7 @@ func (a App) contentString() string {
 		b.WriteString(wrapStyle.Render(msgBlock.String()) + "\n\n")
 	}
 
-	if snapshot.State == runtime.StateWaitingLLM {
+	if snapshot.IsBusy {
 		var streamBlock strings.Builder
 		streamBlock.WriteString(a.styles.AgentLabel.Render("AGENT") + "\n")
 
@@ -441,7 +424,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.viewport.SetContent("")
 			a.err = ""
 			a.status = ""
-			a.lastCmd = "Viewport cleared"
+			a.lastActivity = "Viewport cleared"
 			return a, nil
 		case "ctrl+y":
 			return a, a.copyLastCodeBlock()
@@ -600,7 +583,7 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 			a.session.Reset()
 			a.viewport.SetContent("")
 			a.err = ""
-			a.lastCmd = "Conversation reset"
+			a.lastActivity = "Conversation reset"
 			a.input.SetValue("")
 			return a, nil
 		case "/quit", "/exit":
@@ -613,12 +596,12 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 	}
 
 	a.err = ""
-	a.lastCmd = text
+	a.lastActivity = text
 	a.streamContent = ""
 	a.streamReasoning = ""
 	a.input.SetValue("")
 	a.eventsCh = make(chan runtime.SessionEvent, 100)
-	a.approvalsCh = make(chan runtime.ConfirmationAction, 1)
+	a.approvalsCh = make(chan runtime.ApprovalDecision, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	a.cancel = cancel
 	a.viewport.SetContent(a.contentString())
@@ -630,14 +613,14 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 }
 
 func (a App) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var action runtime.ConfirmationAction
+	var action runtime.ApprovalDecision
 	switch strings.ToLower(msg.String()) {
 	case "y":
-		action = runtime.ConfirmOnce
+		action = runtime.ApproveOnce
 	case "a":
-		action = runtime.ConfirmAlways
+		action = runtime.ApproveAlways
 	case "n":
-		action = runtime.ConfirmDeny
+		action = runtime.DenyApproval
 	default:
 		return a, nil
 	}

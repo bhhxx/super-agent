@@ -10,6 +10,7 @@ const (
 	StateWaitingLLM      State = "WaitingLLM"
 	StateWaitingApproval State = "WaitingApproval"
 	StateRunningTool     State = "RunningTool"
+	StateAdvancingQueue  State = "AdvancingQueue"
 )
 
 type Role string
@@ -25,6 +26,7 @@ type Message struct {
 	Content          string
 	ReasoningContent string
 	ToolCallID       string
+	ToolName         string
 	ToolCalls        []*ToolCall
 }
 
@@ -43,7 +45,7 @@ type ToolSpec struct {
 }
 
 type ModelResponse struct {
-	FinalAnswer      string
+	Content          string
 	ReasoningContent string
 	ToolCalls        []ToolCall
 }
@@ -60,4 +62,18 @@ type Model interface {
 type ToolRunner interface {
 	Specs() []ToolSpec
 	Run(ctx context.Context, call ToolCall) (string, error)
+}
+
+func MarkRiskyToolCalls(calls []ToolCall, specs []ToolSpec) []ToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	risky := make(map[string]bool, len(specs))
+	for _, spec := range specs {
+		risky[spec.Name] = spec.Risky
+	}
+	for i := range calls {
+		calls[i].Risky = risky[calls[i].Name]
+	}
+	return calls
 }
