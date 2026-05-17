@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"sync"
 )
 
 type ApprovalDecision string
@@ -58,13 +59,18 @@ type Snapshot struct {
 type Session struct {
 	engine  *Engine
 	emitter *snapshotEmitter
+	mu      sync.Mutex
 }
 
 func NewSession(engine *Engine) *Session {
 	return &Session{engine: engine, emitter: newSnapshotEmitter()}
 }
 
-func (s *Session) Run(ctx context.Context, query string, events chan<- SessionEvent, approvals <-chan ApprovalDecision) error {
+func (s *Session) RunTurn(ctx context.Context, query string, events chan<- SessionEvent, approvals <-chan ApprovalDecision) error {
+	if !s.mu.TryLock() {
+		return errors.New("session is already running a turn")
+	}
+	defer s.mu.Unlock()
 	defer close(events)
 	err := s.drainRun(ctx, events, approvals, query)
 	s.emitter.emit(events, s.Snapshot())

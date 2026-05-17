@@ -9,6 +9,7 @@ type Event interface {
 var AllEvents = []Event{
 	UserMessageSubmitted{},
 	AssistantMessageReceived{},
+	ToolCallsReceived{},
 	ToolCallsBlockedForApproval{},
 	ToolCallsApprovedToRun{},
 	ToolResultReceived{},
@@ -19,6 +20,7 @@ var AllEvents = []Event{
 	CancelRequested{},
 	ResetRequested{},
 	NoMoreToolCalls{},
+	NextToolCallAvailable{},
 	NextToolCallNeedsApproval{},
 	NextToolCallReadyToRun{},
 	EngineReady{},
@@ -36,6 +38,14 @@ type AssistantMessageReceived struct {
 }
 
 func (AssistantMessageReceived) isEvent() {}
+
+type ToolCallsReceived struct {
+	Content          string
+	Calls            []ToolCall
+	ReasoningContent string
+}
+
+func (ToolCallsReceived) isEvent() {}
 
 type ToolCallsBlockedForApproval struct {
 	Content          string
@@ -95,6 +105,12 @@ func (ResetRequested) isEvent() {}
 type NoMoreToolCalls struct{}
 
 func (NoMoreToolCalls) isEvent() {}
+
+type NextToolCallAvailable struct {
+	Call ToolCall
+}
+
+func (NextToolCallAvailable) isEvent() {}
 
 type NextToolCallNeedsApproval struct {
 	Call ToolCall

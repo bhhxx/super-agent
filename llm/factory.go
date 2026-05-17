@@ -48,4 +48,23 @@ func NewModel(provider string) (runtime.Model, error) {
 	return defaultRegistry.New(provider)
 }
 
+// ModelDisplayName returns the model identifier for the given provider by reading
+// the same env vars as the provider constructors (DEEPSEEK_MODEL, OPENAI_MODEL,
+// ANTHROPIC_MODEL), falling back to each provider's default.
+func ModelDisplayName(provider string) string {
+	if provider == "" {
+		provider = "deepseek"
+	}
+	switch provider {
+	case "deepseek":
+		return envDefault("DEEPSEEK_MODEL", "deepseek-reasoner")
+	case "openai":
+		return envDefault("OPENAI_MODEL", "gpt-4o")
+	case "claude":
+		return envDefault("ANTHROPIC_MODEL", "claude-3-7-sonnet-20250219")
+	default:
+		return provider
+	}
+}
+
 var defaultRegistry = NewDefaultModelRegistry()

@@ -3,13 +3,16 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 )
 
 type Engine struct {
-	mu       sync.Mutex
-	executor EffectExecutor
-	state    EngineState
+	mu          sync.Mutex
+	executor    EffectExecutor
+	policy      Policy
+	state       EngineState
+	effectQueue []Effect
 }
 
 func NewEngine(model Model, tools ToolRunner, initial []Message) *Engine {
@@ -20,10 +23,10 @@ func NewEngineWithExecutor(executor EffectExecutor, initial []Message) *Engine {
 	messages := append([]Message(nil), initial...)
 	return &Engine{
 		executor: executor,
+		policy:   NewDefaultPolicy(),
 		state: EngineState{
-			State:       StateInitializing,
-			Messages:    messages,
-			AlwaysAllow: make(map[string]bool),
+			State:    StateInitializing,
+			Messages: messages,
 		},
 	}
 }
@@ -157,13 +160,15 @@ func (e *Engine) dispatchLocked(event Event) error {
 	}
 	e.state.State = decision.NextState
 	for _, m := range decision.Mutations {
-		e.applyMutation(m)
+		if err := e.applyMutation(m); err != nil {
+			return err
+		}
 	}
-	e.state.PendingEffects = append(e.state.PendingEffects, decision.Effects...)
+	e.effectQueue = append(e.effectQueue, decision.Effects...)
 	return nil
 }
 
-func (e *Engine) applyMutation(mutation Mutation) {
+func (e *Engine) applyMutation(mutation Mutation) error {
 	switch m := mutation.(type) {
 	case AppendUserMessage:
 		e.state.Messages = append(e.state.Messages, Message{Role: RoleUser, Content: m.Content})
@@ -186,32 +191,35 @@ func (e *Engine) applyMutation(mutation Mutation) {
 	case ClearQueuedToolCalls:
 		e.state.QueuedToolCalls = nil
 	case ClearPendingEffects:
-		e.state.PendingEffects = nil
+		e.effectQueue = nil
 	case ResetContext:
-		// Reset conversation context but preserve user preferences.
 		e.state.Messages = nil
 		e.state.PendingTool = nil
 		e.state.QueuedToolCalls = nil
-		e.state.PendingEffects = nil
+		e.effectQueue = nil
 	case AddAlwaysAllow:
-		if e.state.AlwaysAllow == nil {
-			e.state.AlwaysAllow = make(map[string]bool)
+		if p, ok := e.policy.(*DefaultPolicy); ok {
+			p.AddAlwaysAllow(m.Key)
 		}
-		e.state.AlwaysAllow[m.Key] = true
 	case SetAutoApproveTools:
-		e.state.AutoApproveTools = m.Enabled
+		if p, ok := e.policy.(*DefaultPolicy); ok {
+			p.SetAutoApproveTools(m.Enabled)
+		}
+	default:
+		return fmt.Errorf("unknown mutation type: %T", m)
 	}
+	return nil
 }
 
 func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChunk)) error {
 	for {
 		e.mu.Lock()
-		if len(e.state.PendingEffects) == 0 {
+		if len(e.effectQueue) == 0 {
 			e.mu.Unlock()
 			return nil
 		}
-		effect := e.state.PendingEffects[0]
-		e.state.PendingEffects = e.state.PendingEffects[1:]
+		effect := e.effectQueue[0]
+		e.effectQueue = e.effectQueue[1:]
 		e.mu.Unlock()
 		if err := e.executeEffect(ctx, effect, chunkFunc); err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -233,26 +241,20 @@ func (e *Engine) executeEffect(ctx context.Context, effect Effect, chunkFunc fun
 		return err
 	}
 	e.mu.Lock()
-	event := e.resolveResultLocked(result)
+	event := resolveResult(result, e.state.QueuedToolCalls)
+	e.setPolicySpecs(e.toolSpecs())
+	event = e.policy.Reclassify(event)
 	err = e.dispatchLocked(event)
 	e.mu.Unlock()
 	return err
 }
 
-func (e *Engine) resolveResultLocked(result ExecutionResult) Event {
+func resolveResult(result ExecutionResult, queue []ToolCall) Event {
 	switch r := result.(type) {
 	case ModelReplied:
-		calls := MarkRiskyToolCalls(r.Response.ToolCalls, e.toolSpecs())
+		calls := r.Response.ToolCalls
 		if len(calls) > 0 {
-			first := calls[0]
-			if e.needsApproval(first) {
-				return ToolCallsBlockedForApproval{
-					Content:          r.Response.Content,
-					Calls:            calls,
-					ReasoningContent: r.Response.ReasoningContent,
-				}
-			}
-			return ToolCallsApprovedToRun{
+			return ToolCallsReceived{
 				Content:          r.Response.Content,
 				Calls:            calls,
 				ReasoningContent: r.Response.ReasoningContent,
@@ -262,21 +264,13 @@ func (e *Engine) resolveResultLocked(result ExecutionResult) Event {
 	case ToolFinished:
 		return ToolResultReceived{Call: r.Call, Result: r.Result}
 	case ToolQueueChecked:
-		if len(e.state.QueuedToolCalls) == 0 {
+		if len(queue) == 0 {
 			return NoMoreToolCalls{}
 		}
-		call := e.state.QueuedToolCalls[0]
-		if e.needsApproval(call) {
-			return NextToolCallNeedsApproval{Call: call}
-		}
-		return NextToolCallReadyToRun{Call: call}
+		return NextToolCallAvailable{Call: queue[0]}
 	default:
-		return ErrorOccurred{Err: errors.New("unknown effect result type")}
+		return ErrorOccurred{Err: fmt.Errorf("unknown effect result type: %T", r)}
 	}
-}
-
-func (e *Engine) needsApproval(call ToolCall) bool {
-	return call.Risky && !e.state.AlwaysAllow[toolCallKey(call)] && !e.state.AutoApproveTools
 }
 
 func (e *Engine) toolSpecs() []ToolSpec {
@@ -284,4 +278,10 @@ func (e *Engine) toolSpecs() []ToolSpec {
 		return provider.ToolSpecs()
 	}
 	return nil
+}
+
+func (e *Engine) setPolicySpecs(specs []ToolSpec) {
+	if p, ok := e.policy.(*DefaultPolicy); ok {
+		p.Specs = specs
+	}
 }
