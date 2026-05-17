@@ -15,18 +15,12 @@ type Policy interface {
 	ClassifyToolCall(call ToolCall, input ToolPolicyInput) ToolDecision
 }
 
-type ApprovalConfigurator interface {
-	AddAlwaysAllow(key string)
-	SetAutoApproveTools(enabled bool)
-}
-
 type DefaultPolicy struct {
-	AlwaysAllow      map[string]bool
-	AutoApproveTools bool
+	approvals ApprovalStore
 }
 
-func NewDefaultPolicy() *DefaultPolicy {
-	return &DefaultPolicy{AlwaysAllow: make(map[string]bool)}
+func NewDefaultPolicy(approvals ApprovalStore) *DefaultPolicy {
+	return &DefaultPolicy{approvals: approvals}
 }
 
 func (p *DefaultPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput) ToolDecision {
@@ -36,20 +30,12 @@ func (p *DefaultPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput) T
 	return DecisionRunDirectly
 }
 
-func (p *DefaultPolicy) AddAlwaysAllow(key string) {
-	if p.AlwaysAllow == nil {
-		p.AlwaysAllow = make(map[string]bool)
-	}
-	p.AlwaysAllow[key] = true
-}
-
-func (p *DefaultPolicy) SetAutoApproveTools(enabled bool) {
-	p.AutoApproveTools = enabled
-}
-
 func (p *DefaultPolicy) needsApproval(call ToolCall, specs []ToolSpec) bool {
 	risky := isRiskyTool(call.Name, specs)
-	return risky && !p.AlwaysAllow[toolCallKey(call)] && !p.AutoApproveTools
+	if !risky {
+		return false
+	}
+	return !p.approvals.AutoApproveTools() && !p.approvals.IsAlwaysAllowed(NewApprovalKey(call))
 }
 
 func isRiskyTool(name string, specs []ToolSpec) bool {

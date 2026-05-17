@@ -25,13 +25,17 @@ main.go
 Runtime rule:
 
 ```text
-Effect executed → ExecutionResult → resolveResult (pure function) → raw Event
-  → Engine asks Policy.ClassifyToolCall(call, toolPolicyInput) when tool approval is needed
-  → classified Event → Transition(state, event)
-  → TransitionResult { NextState, Mutations, Effects } → applyMutation → runEffects
+QueuedEffect { RunID, EffectID, Effect }
+  → EffectRunner.Run → EffectOutcome
+  → stale RunID check
+  → ResultResolver.Resolve → raw Event
+  → EventClassifier.Classify → classified Event
+  → Transition(state, event)
+  → TransitionResult { NextState, Mutations, Effects }
+  → Reducer.Apply → enqueue owned effects
 ```
 
-Tool approval is a pre-transition classification step. `Engine.classifyEvent` does not mutate state; it turns raw tool events such as `ToolCallsReceived` and `NextToolCallAvailable` into classified events such as `ToolCallBatchFirstNeedsApproval`, `ToolCallBatchFirstReadyToRun`, `QueuedToolCallNeedsApproval`, or `QueuedToolCallReadyToRun`. `Transition` consumes only classified runtime events.
+Tool approval is a pre-transition classification step. `EventClassifier` turns raw tool events such as `ToolCallsReceived` and `NextToolCallAvailable` into classified events such as `ToolCallBatchFirstNeedsApproval`, `ToolCallBatchFirstReadyToRun`, `QueuedToolCallNeedsApproval`, or `QueuedToolCallReadyToRun`. `Transition` consumes only classified runtime events.
 
 Transition table (tool events shown after policy classification):
 
@@ -39,9 +43,15 @@ Transition table (tool events shown after policy classification):
 - `Event`: fact that triggers a transition.
 - `Mutation`: synchronous internal state change.
 - `Effect`: work requested by a transition, such as model calls, tool execution, or internal tool-queue processing.
-- `Transition`: pure state-machine decision. All state changes go through Transition → Mutation — no other code touches engine state directly.
-- `Policy`: approval rules. Classifies one tool call with `ToolPolicyInput`, including tool specs. Default policy handles risk-checking, always-allow, and yolo configuration.
-- `Engine`: scheduler. Resolves execution results, asks Policy to classify tool events, calls Transition, applies mutations, executes effects.
+- `Transition`: pure state-machine decision. It does not run effects or write approval state.
+- `Reducer`: applies mutations to `EngineState`.
+- `ResultResolver`: turns `ExecutionResult` into raw runtime events.
+- `EventClassifier`: turns raw tool events into approval or ready events.
+- `Policy`: approval decision only. It classifies one tool call with `ToolPolicyInput`.
+- `ApprovalStore`: stores always-allow and auto-approve state.
+- `RunController`: owns run id, cancel function, and stale-result checks.
+- `EffectRunner`: executes effects and returns owned outcomes.
+- `Engine`: scheduler. It owns state, lock, lifecycle, event dispatch, effect queue drain, and stale outcome dropping.
 - `Session`: channel boundary for UI events and approvals. Runs one turn (`RunTurn`) per user input, guarded against concurrent calls.
 
 | State | Event | Next | Mutations | Effects |
@@ -52,7 +62,7 @@ Transition table (tool events shown after policy classification):
 | WaitingLLM | ToolCallBatchFirstNeedsApproval | WaitingApproval | AppendAssistantMessage, SetQueuedToolCalls, SetPendingTool | - |
 | WaitingLLM | ToolCallBatchFirstReadyToRun | RunningTool | AppendAssistantMessage, SetQueuedToolCalls | RunTool |
 | WaitingApproval | ApprovalGranted | RunningTool | ClearPendingTool | RunTool |
-| WaitingApproval | ApprovalAlwaysGranted | RunningTool | ClearPendingTool, AddAlwaysAllow | RunTool |
+| WaitingApproval | ApprovalAlwaysGranted | RunningTool | ClearPendingTool | RunTool |
 | WaitingApproval | ApprovalDenied | AdvancingQueue | ClearPendingTool, AppendToolResult | ProcessNextToolCall |
 | RunningTool | ToolResultReceived | AdvancingQueue | AppendToolResult | ProcessNextToolCall |
 | AdvancingQueue | NoMoreToolCalls | WaitingLLM | - | CallModel |

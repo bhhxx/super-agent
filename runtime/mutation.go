@@ -16,7 +16,6 @@ var AllMutations = []Mutation{
 	ClearQueuedToolCalls{},
 	PopQueuedToolCall{},
 	ResetContext{},
-	AddAlwaysAllow{},
 }
 
 type PopQueuedToolCall struct{}
@@ -69,10 +68,3 @@ func (ClearQueuedToolCalls) isMutation() {}
 type ResetContext struct{}
 
 func (ResetContext) isMutation() {}
-
-type AddAlwaysAllow struct {
-	Key string
-}
-
-func (AddAlwaysAllow) isMutation() {}
-

@@ -121,8 +121,8 @@ func TestTransitionTable(t *testing.T) {
 			name: "ApprovalAlwaysGranted/WaitingApproval->RunningTool", state: StateWaitingApproval,
 			event:         ApprovalAlwaysGranted{Call: sampleToolCall()},
 			wantState:     StateRunningTool,
-			mutationCount: 2, // ClearPendingTool + AddAlwaysAllow
-			effectCount:   1, effectType: RunTool{},
+			mutationCount: 1, mutationType: ClearPendingTool{},
+			effectCount: 1, effectType: RunTool{},
 		},
 		{
 			name: "ApprovalAlwaysGranted/rejects_when_not_WaitingApproval", state: StateIdle,

@@ -3,16 +3,21 @@ package runtime
 import (
 	"context"
 	"errors"
-	"fmt"
+	"strconv"
 	"sync"
 )
 
 type Engine struct {
 	mu          sync.Mutex
-	executor    EffectExecutor
-	policy      Policy
+	runner      EffectRunner
+	resolver    ResultResolver
+	classifier  EventClassifier
+	reducer     Reducer
+	runs        RunController
+	approvals   ApprovalStore
 	state       EngineState
-	effectQueue []Effect
+	effectQueue []QueuedEffect
+	nextEffect  int64
 }
 
 func NewEngine(model Model, tools ToolRunner, initial []Message) *Engine {
@@ -20,14 +25,32 @@ func NewEngine(model Model, tools ToolRunner, initial []Message) *Engine {
 }
 
 func NewEngineWithExecutor(executor EffectExecutor, initial []Message) *Engine {
-	return NewEngineWithExecutorAndPolicy(executor, NewDefaultPolicy(), initial)
+	approvals := NewMemoryApprovalStore()
+	return NewEngineWithComponents(
+		NewDefaultEffectRunner(executor),
+		DefaultResultResolver{},
+		NewDefaultEventClassifier(NewDefaultPolicy(approvals), approvals),
+		DefaultReducer{},
+		NewDefaultRunController(),
+		approvals,
+		initial,
+	)
 }
 
 func NewEngineWithExecutorAndPolicy(executor EffectExecutor, policy Policy, initial []Message) *Engine {
+	approvals := NewMemoryApprovalStore()
+	return NewEngineWithComponents(NewDefaultEffectRunner(executor), DefaultResultResolver{}, NewDefaultEventClassifier(policy, approvals), DefaultReducer{}, NewDefaultRunController(), approvals, initial)
+}
+
+func NewEngineWithComponents(runner EffectRunner, resolver ResultResolver, classifier EventClassifier, reducer Reducer, runs RunController, approvals ApprovalStore, initial []Message) *Engine {
 	messages := append([]Message(nil), initial...)
 	return &Engine{
-		executor: executor,
-		policy:   policy,
+		runner:     runner,
+		resolver:   resolver,
+		classifier: classifier,
+		reducer:    reducer,
+		runs:       runs,
+		approvals:  approvals,
 		state: EngineState{
 			State:    StateInitializing,
 			Messages: messages,
@@ -36,11 +59,7 @@ func NewEngineWithExecutorAndPolicy(executor EffectExecutor, policy Policy, init
 }
 
 func (e *Engine) EnableAutoApproveTools() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if p, ok := e.policy.(ApprovalConfigurator); ok {
-		p.SetAutoApproveTools(true)
-	}
+	e.approvals.SetAutoApproveTools(true)
 }
 
 func (e *Engine) State() State {
@@ -104,7 +123,7 @@ func (e *Engine) Approve(ctx context.Context, chunkFunc func(StreamChunk)) error
 	if err != nil {
 		return err
 	}
-	return e.runPendingEffects(ctx, chunkFunc)
+	return e.runPendingEffects(e.runs.CurrentContext(ctx), chunkFunc)
 }
 
 func (e *Engine) ApproveAlways(ctx context.Context, chunkFunc func(StreamChunk)) error {
@@ -114,12 +133,13 @@ func (e *Engine) ApproveAlways(ctx context.Context, chunkFunc func(StreamChunk))
 		return errors.New("no tool is waiting for approval")
 	}
 	call := *e.state.PendingTool
+	e.approvals.AllowAlways(NewApprovalKey(call))
 	err := e.dispatchLocked(ApprovalAlwaysGranted{Call: call})
 	e.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	return e.runPendingEffects(ctx, chunkFunc)
+	return e.runPendingEffects(e.runs.CurrentContext(ctx), chunkFunc)
 }
 
 func (e *Engine) Deny(ctx context.Context, chunkFunc func(StreamChunk)) error {
@@ -134,23 +154,27 @@ func (e *Engine) Deny(ctx context.Context, chunkFunc func(StreamChunk)) error {
 	if err != nil {
 		return err
 	}
-	return e.runPendingEffects(ctx, chunkFunc)
+	return e.runPendingEffects(e.runs.CurrentContext(ctx), chunkFunc)
 }
 
 func (e *Engine) Cancel() error {
+	e.runs.CancelRun()
 	return e.dispatch(CancelRequested{})
 }
 
 func (e *Engine) Reset() error {
+	e.runs.CancelRun()
+	e.runs.StartNewGeneration()
 	return e.dispatch(ResetRequested{})
 }
 
 func (e *Engine) dispatchEventThenRunEffects(ctx context.Context, event Event, chunkFunc func(StreamChunk), afterDispatch func()) error {
+	_, runCtx := e.runs.StartRun(ctx)
 	if err := e.dispatch(event); err != nil {
 		return err
 	}
 	afterDispatch()
-	return e.runPendingEffects(ctx, chunkFunc)
+	return e.runPendingEffects(runCtx, chunkFunc)
 }
 
 func (e *Engine) dispatch(event Event) error {
@@ -166,51 +190,23 @@ func (e *Engine) dispatchLocked(event Event) error {
 	}
 	e.state.State = decision.NextState
 	for _, m := range decision.Mutations {
-		if err := e.applyMutation(m); err != nil {
+		if err := e.reducer.Apply(&e.state, &e.effectQueue, m); err != nil {
 			return err
 		}
 	}
-	e.effectQueue = append(e.effectQueue, decision.Effects...)
+	for _, effect := range decision.Effects {
+		e.effectQueue = append(e.effectQueue, e.queueEffectLocked(effect))
+	}
 	return nil
 }
 
-func (e *Engine) applyMutation(mutation Mutation) error {
-	switch m := mutation.(type) {
-	case AppendUserMessage:
-		e.state.Messages = append(e.state.Messages, Message{Role: RoleUser, Content: m.Content})
-	case AppendAssistantMessage:
-		e.state.Messages = append(e.state.Messages, m.Message)
-	case AppendToolResult:
-		e.state.Messages = append(e.state.Messages, Message{Role: RoleTool, Content: m.Result, ToolCallID: m.Call.ID, ToolName: m.Call.Name})
-	case SetPendingTool:
-		call := m.Call
-		e.state.PendingTool = &call
-	case SetQueuedToolCalls:
-		e.state.QueuedToolCalls = append([]ToolCall(nil), m.Calls...)
-	case PopQueuedToolCall:
-		if len(e.state.QueuedToolCalls) > 0 {
-			e.state.QueuedToolCalls[0] = ToolCall{}
-			e.state.QueuedToolCalls = e.state.QueuedToolCalls[1:]
-		}
-	case ClearPendingTool:
-		e.state.PendingTool = nil
-	case ClearQueuedToolCalls:
-		e.state.QueuedToolCalls = nil
-	case ClearPendingEffects:
-		e.effectQueue = nil
-	case ResetContext:
-		e.state.Messages = nil
-		e.state.PendingTool = nil
-		e.state.QueuedToolCalls = nil
-		e.effectQueue = nil
-	case AddAlwaysAllow:
-		if p, ok := e.policy.(ApprovalConfigurator); ok {
-			p.AddAlwaysAllow(m.Key)
-		}
-	default:
-		return fmt.Errorf("unknown mutation type: %T", m)
+func (e *Engine) queueEffectLocked(effect Effect) QueuedEffect {
+	e.nextEffect++
+	return QueuedEffect{
+		RunID:    e.runs.CurrentRunID(),
+		EffectID: EffectID("effect-" + strconv.FormatInt(e.nextEffect, 10)),
+		Effect:   effect,
 	}
-	return nil
 }
 
 func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChunk)) error {
@@ -234,79 +230,37 @@ func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChu
 	}
 }
 
-func (e *Engine) executeEffect(ctx context.Context, effect Effect, chunkFunc func(StreamChunk)) error {
-	result, err := e.executor.Execute(ctx, effect, ExecutionInput{
+func (e *Engine) executeEffect(ctx context.Context, effect QueuedEffect, chunkFunc func(StreamChunk)) error {
+	outcome, err := e.runner.Run(ctx, effect, ExecutionInput{
 		Messages:  e.Messages(),
 		ToolSpecs: e.toolSpecs(),
 	}, chunkFunc)
 	if err != nil {
 		return err
 	}
+	if !e.runs.IsCurrent(outcome.RunID) {
+		return nil
+	}
 	e.mu.Lock()
-	event := resolveResult(result, e.state.QueuedToolCalls)
-	event = e.classifyEvent(event)
+	event, err := e.resolver.Resolve(outcome.Result, ResultResolveInput{
+		QueuedToolCalls: append([]ToolCall(nil), e.state.QueuedToolCalls...),
+	})
+	if err == nil {
+		event, err = e.classifier.Classify(event, EventClassifyInput{ToolSpecs: e.toolSpecs()})
+	}
+	if err != nil {
+		dispatchErr := e.dispatchLocked(ErrorOccurred{Err: err})
+		e.mu.Unlock()
+		if dispatchErr != nil {
+			return dispatchErr
+		}
+		return err
+	}
 	err = e.dispatchLocked(event)
 	e.mu.Unlock()
 	return err
 }
 
-func resolveResult(result ExecutionResult, queue []ToolCall) Event {
-	switch r := result.(type) {
-	case ModelReplied:
-		calls := r.Response.ToolCalls
-		if len(calls) > 0 {
-			return ToolCallsReceived{
-				Content:          r.Response.Content,
-				Calls:            calls,
-				ReasoningContent: r.Response.ReasoningContent,
-			}
-		}
-		return AssistantMessageReceived{Response: r.Response}
-	case ToolFinished:
-		return ToolResultReceived{Call: r.Call, Result: r.Result}
-	case ToolQueueChecked:
-		if len(queue) == 0 {
-			return NoMoreToolCalls{}
-		}
-		return NextToolCallAvailable{Call: queue[0]}
-	default:
-		return ErrorOccurred{Err: fmt.Errorf("unknown effect result type: %T", r)}
-	}
-}
-
 func (e *Engine) toolSpecs() []ToolSpec {
-	if provider, ok := e.executor.(interface{ ToolSpecs() []ToolSpec }); ok {
-		return provider.ToolSpecs()
-	}
-	return nil
-}
-
-func (e *Engine) classifyEvent(event Event) Event {
-	switch ev := event.(type) {
-	case ToolCallsReceived:
-		if len(ev.Calls) == 0 {
-			return ErrorOccurred{Err: errors.New("empty tool calls")}
-		}
-		input := ToolPolicyInput{ToolSpecs: e.toolSpecs()}
-		if e.policy.ClassifyToolCall(ev.Calls[0], input) == DecisionNeedsApproval {
-			return ToolCallBatchFirstNeedsApproval{
-				Content:          ev.Content,
-				Calls:            ev.Calls,
-				ReasoningContent: ev.ReasoningContent,
-			}
-		}
-		return ToolCallBatchFirstReadyToRun{
-			Content:          ev.Content,
-			Calls:            ev.Calls,
-			ReasoningContent: ev.ReasoningContent,
-		}
-	case NextToolCallAvailable:
-		input := ToolPolicyInput{ToolSpecs: e.toolSpecs()}
-		if e.policy.ClassifyToolCall(ev.Call, input) == DecisionNeedsApproval {
-			return QueuedToolCallNeedsApproval{Call: ev.Call}
-		}
-		return QueuedToolCallReadyToRun{Call: ev.Call}
-	default:
-		return event
-	}
+	return e.runner.ToolSpecs()
 }

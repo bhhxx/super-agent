@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	. "super-agent/runtime"
 )
@@ -100,28 +101,15 @@ func (x *recordingExecutor) Execute(_ context.Context, effect Effect, _ Executio
 }
 
 type recordingPolicy struct {
-	decision    ToolDecision
-	calls       []ToolCall
-	specs       [][]ToolSpec
-	autoApprove bool
-	alwaysAllow []string
+	decision ToolDecision
+	calls    []ToolCall
+	specs    [][]ToolSpec
 }
 
 func (p *recordingPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput) ToolDecision {
 	p.calls = append(p.calls, call)
 	p.specs = append(p.specs, append([]ToolSpec(nil), input.ToolSpecs...))
-	if p.autoApprove {
-		return DecisionRunDirectly
-	}
 	return p.decision
-}
-
-func (p *recordingPolicy) AddAlwaysAllow(key string) {
-	p.alwaysAllow = append(p.alwaysAllow, key)
-}
-
-func (p *recordingPolicy) SetAutoApproveTools(enabled bool) {
-	p.autoApprove = enabled
 }
 
 func TestEngineRunsEffectsThroughInjectedExecutor(t *testing.T) {
@@ -172,7 +160,7 @@ func TestCustomPolicyClassifiesToolCallWithContext(t *testing.T) {
 	}
 }
 
-func TestCustomPolicyReceivesAutoApproveConfiguration(t *testing.T) {
+func TestAutoApproveBypassesCustomPolicyDecision(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
 		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
 		{Content: "done"},
@@ -190,16 +178,14 @@ func TestCustomPolicyReceivesAutoApproveConfiguration(t *testing.T) {
 
 	runSession(t, engine, "use bash")
 
-	if !policy.autoApprove {
-		t.Fatal("custom policy did not receive auto-approve configuration")
-	}
 	if len(tools.calls) != 1 {
 		t.Fatalf("tool calls = %+v, want one", tools.calls)
 	}
 }
 
-func TestCustomPolicyReceivesApproveAlwaysConfiguration(t *testing.T) {
+func TestApproveAlwaysWritesApprovalStoreNotPolicy(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
 		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
 		{Content: "done"},
 	}}
@@ -226,8 +212,8 @@ func TestCustomPolicyReceivesApproveAlwaysConfiguration(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
-	if len(policy.alwaysAllow) != 1 {
-		t.Fatalf("always allow keys = %+v, want one", policy.alwaysAllow)
+	if len(tools.calls) != 2 {
+		t.Fatalf("tool calls = %+v, want repeated approved tool to run", tools.calls)
 	}
 }
 
@@ -810,5 +796,112 @@ func TestApproveAlwaysIsScopedToToolNameAndInput(t *testing.T) {
 	}
 	if approvalCount != 3 {
 		t.Fatalf("approval count = %d, want 3 (bash ls, bash rm, read)", approvalCount)
+	}
+}
+
+type blockingModel struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingModel() *blockingModel {
+	return &blockingModel{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (m *blockingModel) Next(_ context.Context, _ []Message, _ []ToolSpec, _ func(StreamChunk)) (ModelResponse, error) {
+	close(m.started)
+	<-m.release
+	return ModelResponse{Content: "stale"}, nil
+}
+
+func TestCancelDropsStaleModelResult(t *testing.T) {
+	model := newBlockingModel()
+	engine := NewEngine(model, &fakeTool{}, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- session.RunTurn(context.Background(), "hi", events, approvals)
+	}()
+	<-model.started
+	if err := session.Cancel(); err != nil {
+		t.Fatalf("Cancel failed: %v", err)
+	}
+	close(model.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not return")
+	}
+	for range events {
+	}
+	if messages := engine.Messages(); len(messages) != 1 {
+		t.Fatalf("messages = %+v, want only user message", messages)
+	}
+	if engine.State() != StateIdle {
+		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
+	}
+}
+
+func TestResetDropsStaleModelResultAndClearsMessages(t *testing.T) {
+	model := newBlockingModel()
+	engine := NewEngine(model, &fakeTool{}, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	done := make(chan error, 1)
+
+	go func() {
+		done <- session.RunTurn(context.Background(), "hi", events, approvals)
+	}()
+	<-model.started
+	if err := session.Reset(); err != nil {
+		t.Fatalf("Reset failed: %v", err)
+	}
+	close(model.release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("RunTurn did not return")
+	}
+	for range events {
+	}
+	if messages := engine.Messages(); len(messages) != 0 {
+		t.Fatalf("messages = %+v, want reset context to stay empty", messages)
+	}
+	if engine.State() != StateIdle {
+		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
+	}
+}
+
+func TestNoToolsToolCallIsProtocolError(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+	}}
+	engine := NewEngine(model, &fakeTool{}, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+
+	err := session.RunTurn(context.Background(), "use bash", events, approvals)
+	if err == nil {
+		t.Fatal("RunTurn succeeded after model returned a tool call with no tools")
+	}
+	if engine.State() != StateIdle {
+		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
+	}
+	if len(approvals) != 0 {
+		t.Fatal("approval requested for disabled tools")
 	}
 }

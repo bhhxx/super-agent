@@ -100,7 +100,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		}
 		return TransitionResult{
 			NextState: StateRunningTool,
-			Mutations: []Mutation{ClearPendingTool{}, AddAlwaysAllow{Key: toolCallKey(ev.Call)}},
+			Mutations: []Mutation{ClearPendingTool{}},
 			Effects:   []Effect{RunTool{Call: ev.Call}},
 		}, nil
 	case ApprovalDenied:
