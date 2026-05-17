@@ -34,7 +34,6 @@ type ToolCall struct {
 	ID    string
 	Name  string
 	Input string
-	Risky bool
 }
 
 type ToolSpec struct {
@@ -62,18 +61,4 @@ type Model interface {
 type ToolRunner interface {
 	Specs() []ToolSpec
 	Run(ctx context.Context, call ToolCall) (string, error)
-}
-
-func MarkRiskyToolCalls(calls []ToolCall, specs []ToolSpec) []ToolCall {
-	if len(calls) == 0 {
-		return nil
-	}
-	risky := make(map[string]bool, len(specs))
-	for _, spec := range specs {
-		risky[spec.Name] = spec.Risky
-	}
-	for i := range calls {
-		calls[i].Risky = risky[calls[i].Name]
-	}
-	return calls
 }

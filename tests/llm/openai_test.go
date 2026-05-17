@@ -182,7 +182,7 @@ func TestOpenAIModelLeavesToolRiskToRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Next failed: %v", err)
 	}
-	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "bash" || resp.ToolCalls[0].Risky {
+	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].Name != "bash" {
 		t.Fatalf("ToolCalls = %+v", resp.ToolCalls)
 	}
 }
@@ -206,8 +206,5 @@ func TestOpenAIModelReturnsAllToolCalls(t *testing.T) {
 	}
 	if resp.ToolCalls[0].Name != "first" || resp.ToolCalls[1].Name != "second" {
 		t.Fatalf("ToolCalls = %+v, want first then second", resp.ToolCalls)
-	}
-	if resp.ToolCalls[1].Risky {
-		t.Fatalf("provider marked risk instead of runtime: %+v", resp.ToolCalls[1])
 	}
 }
