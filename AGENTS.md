@@ -31,6 +31,8 @@ Effect executed → ExecutionResult → resolveResult (pure function) → raw Ev
   → TransitionResult { NextState, Mutations, Effects } → applyMutation → runEffects
 ```
 
+Tool approval is a pre-transition classification step. `Engine.classifyEvent` does not mutate state; it turns raw tool events such as `ToolCallsReceived` and `NextToolCallAvailable` into classified events such as `ToolCallBatchFirstNeedsApproval`, `ToolCallBatchFirstReadyToRun`, `QueuedToolCallNeedsApproval`, or `QueuedToolCallReadyToRun`. `Transition` consumes only classified runtime events.
+
 Transition table (tool events shown after policy classification):
 
 - `State`: current runtime phase.
@@ -39,7 +41,7 @@ Transition table (tool events shown after policy classification):
 - `Effect`: work requested by a transition, such as model calls, tool execution, or internal tool-queue processing.
 - `Transition`: pure state-machine decision. All state changes go through Transition → Mutation — no other code touches engine state directly.
 - `Policy`: approval rules. Classifies one tool call with `ToolPolicyInput`, including tool specs. Default policy handles risk-checking, always-allow, and yolo configuration.
-- `Engine`: scheduler. Receives events, calls Transition, applies mutations, executes effects. Does not own approval logic — that belongs to Policy.
+- `Engine`: scheduler. Resolves execution results, asks Policy to classify tool events, calls Transition, applies mutations, executes effects.
 - `Session`: channel boundary for UI events and approvals. Runs one turn (`RunTurn`) per user input, guarded against concurrent calls.
 
 | State | Event | Next | Mutations | Effects |
