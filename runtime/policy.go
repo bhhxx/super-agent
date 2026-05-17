@@ -1,5 +1,7 @@
 package runtime
 
+import "errors"
+
 type Policy interface {
 	Reclassify(event Event) Event
 }
@@ -17,6 +19,9 @@ func NewDefaultPolicy() *DefaultPolicy {
 func (p *DefaultPolicy) Reclassify(event Event) Event {
 	switch ev := event.(type) {
 	case ToolCallsReceived:
+		if len(ev.Calls) == 0 {
+			return ErrorOccurred{Err: errors.New("empty tool calls")}
+		}
 		first := ev.Calls[0]
 		if p.needsApproval(first) {
 			return ToolCallsBlockedForApproval{

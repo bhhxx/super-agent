@@ -39,6 +39,9 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		if state != StateWaitingLLM {
 			return TransitionResult{}, errors.New("runtime is not waiting for llm")
 		}
+		if len(ev.Calls) == 0 {
+			return TransitionResult{}, errors.New("empty tool calls")
+		}
 		toolCalls := make([]*ToolCall, 0, len(ev.Calls))
 		for i := range ev.Calls {
 			call := ev.Calls[i]
@@ -60,6 +63,9 @@ func Transition(state State, event Event) (TransitionResult, error) {
 	case ToolCallsApprovedToRun:
 		if state != StateWaitingLLM {
 			return TransitionResult{}, errors.New("runtime is not waiting for llm")
+		}
+		if len(ev.Calls) == 0 {
+			return TransitionResult{}, errors.New("empty tool calls")
 		}
 		toolCalls := make([]*ToolCall, 0, len(ev.Calls))
 		for i := range ev.Calls {
