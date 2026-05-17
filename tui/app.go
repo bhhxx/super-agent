@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/atotto/clipboard"
@@ -31,6 +32,7 @@ type Styles struct {
 	Version          lipgloss.Style
 	ViewportBorder   lipgloss.Style
 	InputFocused     lipgloss.Style
+	ToolCard         lipgloss.Style
 	MarkdownRenderer *glamour.TermRenderer
 }
 
@@ -69,6 +71,11 @@ func DefaultStyles() Styles {
 		BorderForeground(accent).
 		Padding(0, 1)
 
+	s.ToolCard = lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(secondary).
+		Padding(0, 1)
+
 	renderer, _ := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(0),
@@ -78,12 +85,21 @@ func DefaultStyles() Styles {
 	return s
 }
 
+type TUIInfo struct {
+	Provider    string
+	ModelName   string
+	AutoApprove bool
+	NoTools     bool
+	CWD         string
+}
+
 type App struct {
 	session         Conversation
 	input           textinput.Model
 	viewport        viewport.Model
 	spinner         spinner.Model
 	styles          Styles
+	info            TUIInfo
 	history         []string
 	historyIdx      int
 	ready           bool
@@ -125,7 +141,7 @@ func waitForEvent(ch <-chan runtime.SessionEvent) tea.Cmd {
 	}
 }
 
-func New(session Conversation) App {
+func New(session Conversation, info TUIInfo) App {
 	styles := DefaultStyles()
 
 	input := textinput.New()
@@ -145,6 +161,7 @@ func New(session Conversation) App {
 		input:       input,
 		spinner:     s,
 		styles:      styles,
+		info:        info,
 		history:     []string{},
 		eventsCh:    make(chan runtime.SessionEvent, 100),
 		approvalsCh: make(chan runtime.ApprovalDecision, 1),
@@ -172,11 +189,69 @@ func (a App) headerView() string {
 	}
 
 	title := a.styles.Header.Render(" SUPER AGENT ")
-	status := a.styles.Status.Render(fmt.Sprintf(" %s %s", icon, snapshot.State))
+	status := a.styles.Status.Render(fmt.Sprintf(" %s %s", icon, friendlyState(snapshot.State)))
 
 	header := title + status
 	version := a.styles.Version.Width(a.width - lipgloss.Width(header)).Render("v0.1.0")
-	return header + version + "\n"
+	return header + version + "\n" + a.infoBar() + "\n"
+}
+
+func friendlyState(s runtime.State) string {
+	switch s {
+	case runtime.StateInitializing:
+		return "Initializing"
+	case runtime.StateIdle:
+		return "Ready"
+	case runtime.StateWaitingLLM:
+		return "Thinking"
+	case runtime.StateRunningTool:
+		return "Running tool"
+	case runtime.StateWaitingApproval:
+		return "Waiting approval"
+	case runtime.StateAdvancingQueue:
+		return "Streaming"
+	default:
+		return string(s)
+	}
+}
+
+func (a App) infoBar() string {
+	modelStr := a.info.Provider + "/" + a.info.ModelName
+	cwdStr := a.info.CWD
+	if home, err := os.UserHomeDir(); err == nil {
+		cwdStr = strings.Replace(cwdStr, home, "~", 1)
+	}
+	toolsStr := "tools:on"
+	if a.info.NoTools {
+		toolsStr = "tools:off"
+	}
+	approveStr := "approve:auto"
+	if !a.info.AutoApprove {
+		approveStr = "approve:manual"
+	}
+	sep := a.styles.Footer.Render(" │ ")
+	return a.styles.Footer.Render(modelStr) + sep +
+		a.styles.Footer.Render(cwdStr) + sep +
+		a.styles.Footer.Render(toolsStr) + sep +
+		a.styles.Footer.Render(approveStr)
+}
+
+func (a App) welcomeString() string {
+	var b strings.Builder
+	b.WriteString("# Welcome to Super Agent\n\n")
+	b.WriteString("An AI coding assistant. Type a message below to get started.\n\n")
+	toolsLabel := "enabled"
+	if a.info.NoTools {
+		toolsLabel = "disabled"
+	}
+	approveLabel := "manual"
+	if a.info.AutoApprove {
+		approveLabel = "auto"
+	}
+	b.WriteString(fmt.Sprintf("**Model:** %s/%s  ", a.info.Provider, a.info.ModelName))
+	b.WriteString(fmt.Sprintf("**Tools:** %s  **Approval:** %s\n\n", toolsLabel, approveLabel))
+	b.WriteString("**Commands:** `/help` `/clear` `/quit`\n")
+	return a.renderMarkdown(b.String())
 }
 
 func (a App) footerView() string {
@@ -213,7 +288,7 @@ func (a App) footerView() string {
 	inputView := a.styles.InputFocused.Width(a.width - 2).Render(a.input.View())
 	b.WriteString(inputView + "\n")
 
-	footerText := a.styles.Footer.Render(" esc: quit • ?: help • up/down: history • ctrl+l: clear • ctrl+y: copy code")
+	footerText := a.styles.Footer.Render(" ?: help • esc: quit • ↑↓ history • ctrl+l clear")
 	padding := a.width - lipgloss.Width(footerText) - lipgloss.Width(stats)
 	if padding < 0 {
 		padding = 0
@@ -234,6 +309,16 @@ func (a App) renderMarkdown(content string) string {
 	return strings.TrimSpace(out)
 }
 
+func (a App) renderToolCall(tc *runtime.ToolCall) string {
+	header := a.styles.ToolLabel.Render("  " + tc.Name)
+	input := tc.Input
+	if len(input) > 200 {
+		input = input[:200] + "..."
+	}
+	body := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("  " + input)
+	return a.styles.ToolCard.Render(header + "\n" + body)
+}
+
 func (a App) contentString() string {
 	var b strings.Builder
 
@@ -245,6 +330,11 @@ func (a App) contentString() string {
 
 	snapshot := a.session.Snapshot()
 	messages := snapshot.Messages
+
+	if len(messages) == 0 && !snapshot.IsBusy {
+		return a.welcomeString()
+	}
+
 	for _, msg := range messages {
 		var msgBlock strings.Builder
 
@@ -262,7 +352,7 @@ func (a App) contentString() string {
 
 		if len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
-				msgBlock.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Render("  ⚒  "+tc.Name+"("+tc.Input+")") + "\n")
+				msgBlock.WriteString(a.renderToolCall(tc) + "\n")
 			}
 		}
 
@@ -271,7 +361,9 @@ func (a App) contentString() string {
 			if len(content) > 1000 {
 				content = content[:1000] + "... (truncated)"
 			}
-			msgBlock.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(content) + "\n")
+			resultHeader := a.styles.ToolLabel.Render("  " + msg.ToolName + " result")
+			resultBody := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render(content)
+			msgBlock.WriteString(a.styles.ToolCard.Render(resultHeader+"\n"+resultBody) + "\n")
 		} else {
 			if msg.ReasoningContent != "" {
 				msgBlock.WriteString(a.styles.Thinking.Render(msg.ReasoningContent) + "\n\n")

@@ -9,6 +9,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"super-agent/app"
+	"super-agent/llm"
 	"super-agent/tui"
 )
 
@@ -19,15 +20,23 @@ func main() {
 
 	_ = godotenv.Load()
 
-	session, err := app.NewSession(app.LoadConfig(app.Flags{
+	cfg := app.LoadConfig(app.Flags{
 		AutoApproveTools: *autoApproveToolsFlag,
 		NoTools:          *noToolsFlag,
-	}, os.LookupEnv))
+	}, os.LookupEnv)
+	session, err := app.NewSession(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if _, err := tea.NewProgram(tui.New(session), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
+	cwd, _ := os.Getwd()
+	if _, err := tea.NewProgram(tui.New(session, tui.TUIInfo{
+		Provider:    cfg.Provider,
+		ModelName:   llm.ModelDisplayName(cfg.Provider),
+		AutoApprove: cfg.AutoApproveTools,
+		NoTools:     cfg.NoTools,
+		CWD:         cwd,
+	}), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

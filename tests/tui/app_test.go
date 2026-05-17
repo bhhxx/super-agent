@@ -36,7 +36,7 @@ func TestSubmitShowsWaitingLLMWhileModelCommandRuns(t *testing.T) {
 	engine := runtime.NewEngine(blockingModel{release: release}, noopTools{}, nil)
 	engine.Ready()
 	session := runtime.NewSession(engine)
-	var model tea.Model = tui.New(session)
+	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model"})
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	for _, r := range "hello" {
@@ -55,8 +55,8 @@ func TestSubmitShowsWaitingLLMWhileModelCommandRuns(t *testing.T) {
 	waitForState(t, session, runtime.StateWaitingLLM)
 
 	view := model.View()
-	if !strings.Contains(view, string(runtime.StateWaitingLLM)) {
-		t.Fatalf("view = %q, want state %s", view, runtime.StateWaitingLLM)
+	if !strings.Contains(view, "Thinking") {
+		t.Fatalf("view = %q, want friendly state 'Thinking'", view)
 	}
 	close(release)
 	if msg := <-done; msg == nil {
@@ -69,7 +69,7 @@ func TestQuestionMarkCanBeTypedInPrompt(t *testing.T) {
 	engine := runtime.NewEngine(blockingModel{release: release}, noopTools{}, nil)
 	engine.Ready()
 	session := runtime.NewSession(engine)
-	var model tea.Model = tui.New(session)
+	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model"})
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	for _, r := range "what?" {
@@ -100,7 +100,7 @@ func TestApprovalUsesShortcutKeys(t *testing.T) {
 	engine.Ready()
 	session := runtime.NewSession(engine)
 
-	var model tea.Model = tui.New(session)
+	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model"})
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	for _, r := range "run bash" {
 		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
@@ -132,7 +132,7 @@ func TestEscCancelsPendingApproval(t *testing.T) {
 	engine.Ready()
 	session := runtime.NewSession(engine)
 
-	var model tea.Model = tui.New(session)
+	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model"})
 	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	for _, r := range "run bash" {
 		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
