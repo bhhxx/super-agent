@@ -199,6 +199,7 @@ func (e *Engine) applyMutation(mutation Mutation) {
 		e.pendingToolQueue = append([]ToolCall(nil), m.Calls...)
 	case PopPendingToolQueue:
 		if len(e.pendingToolQueue) > 0 {
+			e.pendingToolQueue[0] = ToolCall{}
 			e.pendingToolQueue = e.pendingToolQueue[1:]
 		}
 	case ClearPendingTool:
