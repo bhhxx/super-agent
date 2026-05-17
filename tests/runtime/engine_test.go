@@ -748,6 +748,38 @@ func TestCancelClearsPendingToolAndEffects(t *testing.T) {
 	}
 }
 
+func TestApprovalWaitContextCancelCancelsEngine(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "rm -rf /"}}},
+	}}
+	engine := NewEngine(model, &fakeTool{specs: []ToolSpec{{Name: "bash", Risky: true}}}, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	session := NewSession(engine)
+	ctx, cancel := context.WithCancel(context.Background())
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.RunTurn(ctx, "danger", events, approvals)
+	}()
+	waitForApproval(t, events, approvals, nil)
+
+	cancel()
+	err := <-done
+	if err == nil {
+		t.Fatal("RunTurn succeeded after approval context cancellation")
+	}
+	if engine.State() != StateIdle {
+		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
+	}
+	if _, ok := engine.PendingTool(); ok {
+		t.Fatal("pending tool still exists")
+	}
+}
+
 func waitForApproval(t *testing.T, events <-chan SessionEvent, approvals chan<- ApprovalDecision, check func()) {
 	t.Helper()
 	for ev := range events {
@@ -921,6 +953,12 @@ func TestSessionRunReturnsErrorWhenApprovalChannelCloses(t *testing.T) {
 	err := <-done
 	if err == nil || err.Error() != "approval channel closed" {
 		t.Fatalf("Run error = %v, want approval channel closed", err)
+	}
+	if engine.State() != StateIdle {
+		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)
+	}
+	if _, ok := engine.PendingTool(); ok {
+		t.Fatal("pending tool still exists")
 	}
 	if len(tools.calls) != 0 {
 		t.Fatalf("tool calls = %+v, want none", tools.calls)

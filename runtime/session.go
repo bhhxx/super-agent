@@ -110,6 +110,7 @@ func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, appr
 			s.emitSnapshot(events)
 			action, err := waitApproval(ctx, approvals)
 			if err != nil {
+				_ = s.engine.Cancel()
 				events <- SessionError{Err: err}
 				return err
 			}
