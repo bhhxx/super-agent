@@ -13,6 +13,7 @@ type RunController interface {
 	StartRun(parent context.Context) (RunID, context.Context)
 	StartNewGeneration()
 	CancelRun()
+	FinishRun(runID RunID)
 	CurrentRunID() RunID
 	CurrentContext() (context.Context, bool)
 	IsCurrent(runID RunID) bool
@@ -56,6 +57,15 @@ func (c *DefaultRunController) CancelRun() {
 	c.cancelLocked()
 	c.next++
 	c.runID = RunID("run-" + strconv.FormatInt(c.next, 10))
+}
+
+func (c *DefaultRunController) FinishRun(runID RunID) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if runID == "" || runID != c.runID {
+		return
+	}
+	c.cancelLocked()
 }
 
 func (c *DefaultRunController) CurrentRunID() RunID {

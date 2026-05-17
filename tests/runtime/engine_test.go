@@ -113,6 +113,36 @@ func (p *recordingPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput)
 	return p.decision
 }
 
+type blockingApprovalStore struct {
+	blockAllow chan struct{}
+	allowing   chan struct{}
+	allowed    map[ApprovalKey]bool
+}
+
+func newBlockingApprovalStore() *blockingApprovalStore {
+	return &blockingApprovalStore{
+		blockAllow: make(chan struct{}),
+		allowing:   make(chan struct{}),
+		allowed:    make(map[ApprovalKey]bool),
+	}
+}
+
+func (s *blockingApprovalStore) AllowAlways(key ApprovalKey) {
+	close(s.allowing)
+	<-s.blockAllow
+	s.allowed[key] = true
+}
+
+func (s *blockingApprovalStore) IsAlwaysAllowed(key ApprovalKey) bool {
+	return s.allowed[key]
+}
+
+func (s *blockingApprovalStore) SetAutoApproveTools(bool) {}
+
+func (s *blockingApprovalStore) AutoApproveTools() bool {
+	return false
+}
+
 func TestEngineRunsEffectsThroughInjectedExecutor(t *testing.T) {
 	executor := &recordingExecutor{}
 	engine := NewEngineWithExecutor(executor, nil)
@@ -181,6 +211,144 @@ func TestAutoApproveBypassesCustomPolicyDecision(t *testing.T) {
 
 	if len(tools.calls) != 1 {
 		t.Fatalf("tool calls = %+v, want one", tools.calls)
+	}
+}
+
+func TestWaitingApprovalKeepsRunContext(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+		{Content: "done"},
+	}}
+	tools := &fakeTool{specs: []ToolSpec{{Name: "bash", Risky: true}}}
+	runs := NewDefaultRunController()
+	approvals := NewMemoryApprovalStore()
+	engine := NewEngineWithComponents(
+		NewDefaultEffectRunner(NewDefaultEffectExecutor(model, tools)),
+		DefaultResultResolver{},
+		NewDefaultEventClassifier(NewDefaultPolicy(), approvals),
+		DefaultReducer{},
+		runs,
+		approvals,
+		nil,
+	)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvalDecisions := make(chan ApprovalDecision, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.RunTurn(context.Background(), "danger", events, approvalDecisions)
+	}()
+	waitForApproval(t, events, approvalDecisions, nil)
+
+	if _, ok := runs.CurrentContext(); !ok {
+		t.Fatal("run context missing while waiting approval")
+	}
+
+	approvalDecisions <- DenyApproval
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+}
+
+func TestFinalAssistantResponseFinishesRun(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{{Content: "done"}}}
+	runs := NewDefaultRunController()
+	approvals := NewMemoryApprovalStore()
+	engine := NewEngineWithComponents(
+		NewDefaultEffectRunner(NewDefaultEffectExecutor(model, &fakeTool{})),
+		DefaultResultResolver{},
+		NewDefaultEventClassifier(NewDefaultPolicy(), approvals),
+		DefaultReducer{},
+		runs,
+		approvals,
+		nil,
+	)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	runSession(t, engine, "hi")
+
+	if _, ok := runs.CurrentContext(); ok {
+		t.Fatal("run context still exists after final assistant response")
+	}
+}
+
+func TestCancelAndResetClearRunContext(t *testing.T) {
+	runs := NewDefaultRunController()
+	_, ctx := runs.StartRun(context.Background())
+	if _, ok := runs.CurrentContext(); !ok {
+		t.Fatal("run context missing after start")
+	}
+	if ctx == nil {
+		t.Fatal("started run returned nil context")
+	}
+
+	runs.CancelRun()
+	if _, ok := runs.CurrentContext(); ok {
+		t.Fatal("run context still exists after cancel")
+	}
+
+	runs.StartRun(context.Background())
+	runs.StartNewGeneration()
+	if _, ok := runs.CurrentContext(); ok {
+		t.Fatal("run context still exists after reset generation")
+	}
+}
+
+func TestApproveAlwaysWritesStoreWithoutHoldingEngineLock(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+		{Content: "done"},
+	}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
+	store := newBlockingApprovalStore()
+	engine := NewEngineWithComponents(
+		NewDefaultEffectRunner(NewDefaultEffectExecutor(model, tools)),
+		DefaultResultResolver{},
+		NewDefaultEventClassifier(NewDefaultPolicy(), store),
+		DefaultReducer{},
+		NewDefaultRunController(),
+		store,
+		nil,
+	)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.RunTurn(context.Background(), "danger", events, approvals)
+	}()
+	waitForApproval(t, events, approvals, nil)
+
+	approvals <- ApproveAlways
+	<-store.allowing
+
+	stateRead := make(chan State, 1)
+	go func() {
+		stateRead <- engine.State()
+	}()
+	select {
+	case <-stateRead:
+	case <-time.After(200 * time.Millisecond):
+		close(store.blockAllow)
+		t.Fatal("engine lock held while writing approval store")
+	}
+
+	close(store.blockAllow)
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
 	}
 }
 

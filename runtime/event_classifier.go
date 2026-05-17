@@ -28,7 +28,7 @@ func (c *DefaultEventClassifier) Classify(event Event, input EventClassifyInput)
 		if len(input.ToolSpecs) == 0 {
 			return nil, errors.New("model returned tool call while tools are disabled")
 		}
-		if c.shouldApprove(ev.Calls[0], input.ToolSpecs) {
+		if c.shouldRunDirectly(ev.Calls[0], input.ToolSpecs) {
 			return ToolCallBatchFirstReadyToRun{
 				Content:          ev.Content,
 				Calls:            ev.Calls,
@@ -41,7 +41,7 @@ func (c *DefaultEventClassifier) Classify(event Event, input EventClassifyInput)
 			ReasoningContent: ev.ReasoningContent,
 		}, nil
 	case NextToolCallAvailable:
-		if c.shouldApprove(ev.Call, input.ToolSpecs) {
+		if c.shouldRunDirectly(ev.Call, input.ToolSpecs) {
 			return QueuedToolCallReadyToRun{Call: ev.Call}, nil
 		}
 		return QueuedToolCallNeedsApproval{Call: ev.Call}, nil
@@ -50,7 +50,7 @@ func (c *DefaultEventClassifier) Classify(event Event, input EventClassifyInput)
 	}
 }
 
-func (c *DefaultEventClassifier) shouldApprove(call ToolCall, specs []ToolSpec) bool {
+func (c *DefaultEventClassifier) shouldRunDirectly(call ToolCall, specs []ToolSpec) bool {
 	if c.approvals.AutoApproveTools() || c.approvals.IsAlwaysAllowed(NewApprovalKey(call)) {
 		return true
 	}

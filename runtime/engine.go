@@ -137,7 +137,11 @@ func (e *Engine) ApproveAlways(ctx context.Context, chunkFunc func(StreamChunk))
 		return errors.New("no tool is waiting for approval")
 	}
 	call := *e.state.PendingTool
+	e.mu.Unlock()
+
 	e.approvals.AllowAlways(NewApprovalKey(call))
+
+	e.mu.Lock()
 	err := e.dispatchLocked(ApprovalAlwaysGranted{Call: call})
 	e.mu.Unlock()
 	if err != nil {
@@ -214,9 +218,7 @@ func (e *Engine) dispatchLocked(event Event) error {
 func (e *Engine) applyTransitionLocked(decision TransitionResult) error {
 	e.state.State = decision.NextState
 	for _, m := range decision.Mutations {
-		if err := e.reducer.Apply(&e.state, &e.effectQueue, m); err != nil {
-			return err
-		}
+		e.reducer.Apply(&e.state, &e.effectQueue, m)
 	}
 	for _, effect := range decision.Effects {
 		e.effectQueue = append(e.effectQueue, e.queueEffectLocked(effect))
@@ -234,9 +236,13 @@ func (e *Engine) queueEffectLocked(effect Effect) QueuedEffect {
 }
 
 func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChunk)) error {
+	runID := e.runs.CurrentRunID()
 	for {
 		e.mu.Lock()
 		if len(e.effectQueue) == 0 {
+			if e.state.State == StateIdle {
+				e.runs.FinishRun(runID)
+			}
 			e.mu.Unlock()
 			return nil
 		}
@@ -245,6 +251,7 @@ func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChu
 		e.mu.Unlock()
 		if err := e.executeEffect(ctx, effect, chunkFunc); err != nil {
 			if errors.Is(err, context.Canceled) {
+				e.runs.CancelRun()
 				_ = e.dispatch(CancelRequested{})
 			} else {
 				_ = e.dispatch(ErrorOccurred{Err: err})
