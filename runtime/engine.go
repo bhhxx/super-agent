@@ -137,16 +137,14 @@ func (e *Engine) ApproveAlways(ctx context.Context, chunkFunc func(StreamChunk))
 		return errors.New("no tool is waiting for approval")
 	}
 	call := *e.state.PendingTool
-	e.mu.Unlock()
-
-	e.approvals.AllowAlways(NewApprovalKey(call))
-
-	e.mu.Lock()
 	err := e.dispatchLocked(ApprovalAlwaysGranted{Call: call})
 	e.mu.Unlock()
 	if err != nil {
 		return err
 	}
+
+	e.approvals.AllowAlways(NewApprovalKey(call))
+
 	runCtx, ok := e.runs.CurrentContext()
 	if !ok {
 		return errors.New("no active run context")

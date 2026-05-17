@@ -340,7 +340,11 @@ func TestApproveAlwaysWritesStoreWithoutHoldingEngineLock(t *testing.T) {
 		stateRead <- engine.State()
 	}()
 	select {
-	case <-stateRead:
+	case state := <-stateRead:
+		if state == StateWaitingApproval {
+			close(store.blockAllow)
+			t.Fatal("approve-always persisted approval before dispatching approval transition")
+		}
 	case <-time.After(200 * time.Millisecond):
 		close(store.blockAllow)
 		t.Fatal("engine lock held while writing approval store")
