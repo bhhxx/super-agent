@@ -20,10 +20,14 @@ func NewEngine(model Model, tools ToolRunner, initial []Message) *Engine {
 }
 
 func NewEngineWithExecutor(executor EffectExecutor, initial []Message) *Engine {
+	return NewEngineWithExecutorAndPolicy(executor, NewDefaultPolicy(), initial)
+}
+
+func NewEngineWithExecutorAndPolicy(executor EffectExecutor, policy Policy, initial []Message) *Engine {
 	messages := append([]Message(nil), initial...)
 	return &Engine{
 		executor: executor,
-		policy:   NewDefaultPolicy(),
+		policy:   policy,
 		state: EngineState{
 			State:    StateInitializing,
 			Messages: messages,

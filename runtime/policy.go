@@ -67,5 +67,5 @@ func (p *DefaultPolicy) isRiskyTool(name string) bool {
 			return s.Risky
 		}
 	}
-	return false
+	return true
 }
