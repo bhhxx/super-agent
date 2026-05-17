@@ -177,11 +177,6 @@ func Transition(state State, event Event) (TransitionResult, error) {
 			return TransitionResult{}, errors.New("runtime is not initializing")
 		}
 		return TransitionResult{NextState: StateIdle}, nil
-	case AutoApproveToolsRequested:
-		return TransitionResult{
-			NextState: state,
-			Mutations: []Mutation{SetAutoApproveTools{Enabled: ev.Enabled}},
-		}, nil
 	case ResetRequested:
 		return TransitionResult{NextState: StateIdle, Mutations: []Mutation{ResetContext{}}}, nil
 	default:

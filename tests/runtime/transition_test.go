@@ -239,18 +239,6 @@ func TestTransitionTable(t *testing.T) {
 			mutationCount: 3,
 		},
 
-		// --- AutoApproveToolsRequested ---
-		{
-			name: "AutoApproveToolsRequested/preserves_state", state: StateIdle,
-			event: AutoApproveToolsRequested{Enabled: true}, wantState: StateIdle,
-			mutationCount: 1, mutationType: SetAutoApproveTools{},
-		},
-		{
-			name: "AutoApproveToolsRequested/works_from_WaitingLLM", state: StateWaitingLLM,
-			event: AutoApproveToolsRequested{Enabled: true}, wantState: StateWaitingLLM,
-			mutationCount: 1, mutationType: SetAutoApproveTools{},
-		},
-
 		// --- ResetRequested ---
 		{
 			name: "ResetRequested/Idle->Idle", state: StateIdle,

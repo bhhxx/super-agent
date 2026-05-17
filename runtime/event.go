@@ -24,7 +24,6 @@ var AllEvents = []Event{
 	NextToolCallNeedsApproval{},
 	NextToolCallReadyToRun{},
 	EngineReady{},
-	AutoApproveToolsRequested{},
 }
 
 type UserMessageSubmitted struct {
@@ -128,8 +127,3 @@ type EngineReady struct{}
 
 func (EngineReady) isEvent() {}
 
-type AutoApproveToolsRequested struct {
-	Enabled bool
-}
-
-func (AutoApproveToolsRequested) isEvent() {}

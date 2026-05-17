@@ -17,7 +17,6 @@ var AllMutations = []Mutation{
 	PopQueuedToolCall{},
 	ResetContext{},
 	AddAlwaysAllow{},
-	SetAutoApproveTools{},
 }
 
 type PopQueuedToolCall struct{}
@@ -77,8 +76,3 @@ type AddAlwaysAllow struct {
 
 func (AddAlwaysAllow) isMutation() {}
 
-type SetAutoApproveTools struct {
-	Enabled bool
-}
-
-func (SetAutoApproveTools) isMutation() {}

@@ -38,7 +38,9 @@ func NewEngineWithExecutorAndPolicy(executor EffectExecutor, policy Policy, init
 func (e *Engine) EnableAutoApproveTools() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	_ = e.dispatchLocked(AutoApproveToolsRequested{Enabled: true})
+	if p, ok := e.policy.(*DefaultPolicy); ok {
+		p.SetAutoApproveTools(true)
+	}
 }
 
 func (e *Engine) State() State {
@@ -204,10 +206,6 @@ func (e *Engine) applyMutation(mutation Mutation) error {
 	case AddAlwaysAllow:
 		if p, ok := e.policy.(*DefaultPolicy); ok {
 			p.AddAlwaysAllow(m.Key)
-		}
-	case SetAutoApproveTools:
-		if p, ok := e.policy.(*DefaultPolicy); ok {
-			p.SetAutoApproveTools(m.Enabled)
 		}
 	default:
 		return fmt.Errorf("unknown mutation type: %T", m)
