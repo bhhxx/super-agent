@@ -40,6 +40,7 @@ type Metadata struct {
 	Model                  string    `json:"model"`
 	CWD                    string    `json:"cwd"`
 	InstructionFingerprint string    `json:"instruction_fingerprint"`
+	InstructionSources     []string  `json:"instruction_sources,omitempty"`
 	CurrentTurnID          TurnID    `json:"current_turn_id"`
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"super-agent/app/instructions"
 	"super-agent/llm"
 )
 
@@ -15,10 +16,11 @@ type Flags struct {
 }
 
 type Config struct {
-	Provider         string
-	AutoApproveTools bool
-	NoTools          bool
-	ModelConfig      llm.Config
+	Provider           string
+	AutoApproveTools   bool
+	NoTools            bool
+	ModelConfig        llm.Config
+	InstructionSources []string
 }
 
 type Settings struct {
@@ -56,11 +58,20 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 		return Config{}, err
 	}
 	provider := settings.Provider
+	cwd, err := os.Getwd()
+	if err != nil {
+		return Config{}, err
+	}
+	bundle, err := instructions.Load(cwd)
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
-		Provider:         provider,
-		AutoApproveTools: flags.AutoApproveTools || envTrue(lookup, "YOLO"),
-		NoTools:          flags.NoTools || envTrue(lookup, "NO_TOOLS"),
-		ModelConfig:      settings.Providers[provider],
+		Provider:           provider,
+		AutoApproveTools:   flags.AutoApproveTools || envTrue(lookup, "YOLO"),
+		NoTools:            flags.NoTools || envTrue(lookup, "NO_TOOLS"),
+		ModelConfig:        settings.Providers[provider],
+		InstructionSources: instructionSourcePaths(bundle),
 	}, nil
 }
 

@@ -8,7 +8,7 @@
 - Keep effect execution in `runtime/execution/`.
 - Keep session/UI boundary in `runtime/session/`.
 - Keep durable session storage in `runtime/store/`.
-- Load project instructions from `AGENTS.md` in the current working directory.
+- Load layered instructions with `app/instructions`: user memory, root-to-leaf `AGENTS.md`, fallback `CLAUDE.md`.
 - Preserve `system` messages such as project instructions across reset.
 - Do not scatter transition rules into `tui/`, `llm/`, or `tools/`.
 - Use existing vocabulary: `State`, `Event`, `Mutation`, `Effect`, `Transition`.
@@ -27,7 +27,7 @@
 - `go run .`: run TUI.
 - `go run . --no-tools`: run without tools.
 - `go run . --yolo`: auto-approve tools.
-- TUI session commands: `/sessions`, `/resume <id>`, `/rename <id> <title>`, `/delete-session <id>`, `/compact`, `/undo`.
+- TUI session commands: `/memory`, `/sessions`, `/resume <id>`, `/rename <id> <title>`, `/delete-session <id>`, `/compact`, `/undo`.
 - `go test ./...`: run all tests.
 - `gofmt -w <files>`: format changed Go files.
 - `./scripts/build-local.sh`: install `/usr/local/bin/super-agent`.

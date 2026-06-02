@@ -91,6 +91,7 @@ type TUIInfo struct {
 	AutoApprove bool
 	NoTools     bool
 	CWD         string
+	MemoryPaths []string
 }
 
 type App struct {
@@ -268,7 +269,7 @@ func (a App) welcomeString() string {
 	}
 	b.WriteString(fmt.Sprintf("**Model:** %s/%s  ", a.info.Provider, a.info.ModelName))
 	b.WriteString(fmt.Sprintf("**Tools:** %s  **Approval:** %s\n\n", toolsLabel, approveLabel))
-	b.WriteString("**Commands:** `/help` `/clear` `/sessions` `/resume <id>` `/compact` `/undo` `/quit`\n")
+	b.WriteString("**Commands:** `/help` `/memory` `/clear` `/sessions` `/resume <id>` `/compact` `/undo` `/quit`\n")
 	return a.renderMarkdown(b.String())
 }
 
@@ -700,6 +701,20 @@ func formatSessions(summaries []runtime.SessionSummary) string {
 	return strings.Join(lines, "\n")
 }
 
+func formatMemory(paths []string) string {
+	if len(paths) == 0 {
+		return "No instruction or memory files loaded"
+	}
+	var b strings.Builder
+	b.WriteString("Loaded memory sources:\n")
+	for _, path := range paths {
+		b.WriteString("- ")
+		b.WriteString(path)
+		b.WriteByte('\n')
+	}
+	return strings.TrimSpace(b.String())
+}
+
 func (a App) View() string {
 	if !a.ready {
 		return "\n  Initializing..."
@@ -739,6 +754,11 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 		parts := strings.Fields(text)
 		cmd := parts[0]
 		switch cmd {
+		case "/memory":
+			a.err = ""
+			a.status = formatMemory(a.info.MemoryPaths)
+			a.input.SetValue("")
+			return a, nil
 		case "/clear", "/reset":
 			if err := a.session.Reset(); err != nil {
 				a.err = "Reset failed: " + err.Error()

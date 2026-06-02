@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"super-agent/app/instructions"
 	"super-agent/llm"
 	"super-agent/runtime"
 	"super-agent/runtime/store"
@@ -24,7 +25,7 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 	if cfg.NoTools {
 		toolRunner = tools.NoTools{}
 	}
-	initial, err := initialMessages()
+	initial, bundle, err := initialMessages()
 	if err != nil {
 		return nil, err
 	}
@@ -49,6 +50,7 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 		CWD:                    cwd,
 		Title:                  filepath.Base(cwd),
 		InstructionFingerprint: store.Fingerprint(initial),
+		InstructionSources:     instructionSourcePaths(bundle),
 	}, initial)
 	if err != nil {
 		return nil, err
@@ -61,26 +63,34 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 	return runtime.NewPersistentSession(engine, st, meta), nil
 }
 
-func initialMessages() ([]runtime.Message, error) {
+func initialMessages() ([]runtime.Message, instructions.Bundle, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return nil, err
+		return nil, instructions.Bundle{}, err
 	}
-	instructions, err := LoadProjectInstructions(cwd)
+	bundle, err := instructions.Load(cwd)
 	if err != nil {
-		return nil, err
+		return nil, instructions.Bundle{}, err
 	}
 	content := strings.TrimSpace(SystemPrompt)
-	if instructions != "" {
+	if bundle.Content != "" {
 		if content != "" {
 			content += "\n\n"
 		}
-		content += strings.TrimSpace(instructions)
+		content += strings.TrimSpace(bundle.Content)
 	}
 	if content == "" {
-		return nil, nil
+		return nil, bundle, nil
 	}
-	return []runtime.Message{{Role: runtime.RoleSystem, Content: content}}, nil
+	return []runtime.Message{{Role: runtime.RoleSystem, Content: content}}, bundle, nil
+}
+
+func instructionSourcePaths(bundle instructions.Bundle) []string {
+	paths := make([]string, 0, len(bundle.Sources))
+	for _, source := range bundle.Sources {
+		paths = append(paths, source.Path)
+	}
+	return paths
 }
 
 func appendCheckpoint(st *store.Store, id store.SessionID, call runtime.ToolCall) error {

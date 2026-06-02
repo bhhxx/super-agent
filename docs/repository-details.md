@@ -6,7 +6,7 @@
 main.go
   -> app.LoadConfig
   -> app.NewSession
-       -> app.LoadProjectInstructions
+       -> app/instructions.Load
        -> llm.NewModel
        -> tools.DefaultRegistry / tools.NoTools
        -> runtime.NewEngine
@@ -16,6 +16,7 @@ main.go
 ```
 
 - `app/`: config and session assembly.
+- `app/instructions/`: user memory and layered project instruction loading.
 - `runtime/`: public aliases and constructors for runtime packages.
 - `runtime/model/`: shared runtime types and interfaces.
 - `runtime/machine/`: state, events, mutations, effects, reducer, transitions.
@@ -30,14 +31,17 @@ main.go
 
 ## Project Instructions
 
-`app.NewSession` reads `AGENTS.md` from the current working directory. When present, its contents become the initial `system` message passed to the runtime. OpenAI-compatible providers send it as a chat `system` message. Claude sends it through the Anthropic `system` field. `ResetContext` clears conversation state but preserves `system` messages. Persistent replay also preserves system messages across reset records.
+`app/instructions.Load` reads optional user memory from `~/.superagent/AGENTS.md`, then searches upward from the current working directory and merges project instructions from root to leaf. `AGENTS.md` wins in a directory; `CLAUDE.md` is loaded as lower-priority compatibility guidance only when that directory has no `AGENTS.md`. Each instruction file is capped at 128 KiB and oversized files return a clear path-specific error.
+
+`app.NewSession` appends the merged instruction bundle to the built-in system prompt and passes one `system` message to the runtime. OpenAI-compatible providers send it as a chat `system` message. Claude sends it through the Anthropic `system` field. `ResetContext` clears conversation state but preserves `system` messages. Persistent replay also preserves system messages across reset records.
 
 ## Session Persistence
 
-Sessions are stored under `~/.superagent/sessions/<session-id>/` as `meta.json` plus `events.jsonl`. Metadata includes session id, turn id, timestamps, provider/model, cwd, title, and instruction fingerprint. `runtime/session` owns durable event emission for messages, approvals, tool results, cancel, reset, errors, checkpoints, and compact records. `runtime/store` replays messages for `/resume`.
+Sessions are stored under `~/.superagent/sessions/<session-id>/` as `meta.json` plus `events.jsonl`. Metadata includes session id, turn id, timestamps, provider/model, cwd, title, instruction fingerprint, and instruction source paths. `runtime/session` owns durable event emission for messages, approvals, tool results, cancel, reset, errors, checkpoints, and compact records. `runtime/store` replays messages for `/resume`.
 
 TUI commands:
 
+- `/memory`: show loaded instruction and memory source paths.
 - `/sessions`: list saved sessions.
 - `/resume <id>`: load a prior transcript into the current engine.
 - `/rename <id> <title>`: update session title.

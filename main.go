@@ -40,6 +40,7 @@ func main() {
 		AutoApprove: cfg.AutoApproveTools,
 		NoTools:     cfg.NoTools,
 		CWD:         cwd,
+		MemoryPaths: cfg.InstructionSources,
 	}), tea.WithAltScreen(), tea.WithMouseCellMotion()).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

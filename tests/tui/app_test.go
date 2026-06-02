@@ -223,6 +223,31 @@ func TestTUIRendersSessionEventsWithoutSnapshotReads(t *testing.T) {
 	}
 }
 
+func TestMemoryCommandDisplaysLoadedSources(t *testing.T) {
+	engine := runtime.NewEngine(&approvalModel{}, noopTools{}, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	session := runtime.NewSession(engine)
+	var model tea.Model = tui.New(session, tui.TUIInfo{
+		Provider:    "test",
+		ModelName:   "test-model",
+		MemoryPaths: []string{"/repo/AGENTS.md", "/repo/pkg/CLAUDE.md"},
+	})
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	for _, r := range "/memory" {
+		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := model.View()
+	if !strings.Contains(view, "Loaded memory sources") ||
+		!strings.Contains(view, "/repo/AGENTS.md") ||
+		!strings.Contains(view, "/repo/pkg/CLAUDE.md") {
+		t.Fatalf("view = %q, want memory sources", view)
+	}
+}
+
 type approvalModel struct {
 	responses []runtime.ModelResponse
 }
