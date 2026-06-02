@@ -29,6 +29,17 @@ func NewRegistry(items ...Tool) *Registry {
 	return registry
 }
 
+func DefaultRegistry() *Registry {
+	return NewRegistry(
+		ReadFileTool{},
+		ListFilesTool{},
+		SearchTool{},
+		ApplyPatchTool{},
+		WriteFileTool{},
+		BashTool{},
+	)
+}
+
 func (r *Registry) Specs() []runtime.ToolSpec {
 	specs := make([]runtime.ToolSpec, 0, len(r.order))
 	for _, name := range r.order {

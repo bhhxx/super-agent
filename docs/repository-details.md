@@ -8,7 +8,7 @@ main.go
   -> app.NewSession
        -> app.LoadProjectInstructions
        -> llm.NewModel
-       -> tools.NewRegistry / tools.NoTools
+       -> tools.DefaultRegistry / tools.NoTools
        -> runtime.NewEngine
        -> runtime.NewSession
   -> tui.New(session)
@@ -22,13 +22,17 @@ main.go
 - `runtime/engine/`: orchestration, state lock, lifecycle, dispatch, stale-result dropping.
 - `runtime/session/`: channel boundary for TUI events and approvals.
 - `llm/`: DeepSeek, OpenAI, Claude adapters.
-- `tools/`: bash runner, registry, no-tool mode.
+- `tools/`: file tools, search, patch/write tools, bash runner, registry, no-tool mode.
 - `tui/`: Bubble Tea event loop and approval UI.
 - `tests/`: external package tests by module.
 
 ## Project Instructions
 
 `app.NewSession` reads `AGENTS.md` from the current working directory. When present, its contents become the initial `system` message passed to the runtime. OpenAI-compatible providers send it as a chat `system` message. Claude sends it through the Anthropic `system` field. `ResetContext` clears conversation state but preserves `system` messages.
+
+## Default Tools
+
+`tools.DefaultRegistry` exposes `read_file`, `list_files`, `search`, `apply_patch`, `write_file`, and `bash`. File-oriented tools use structured JSON inputs and reject paths outside the current working directory. `apply_patch`, `write_file`, and `bash` are risky tools and require approval unless auto-approval is enabled.
 
 ## Runtime Rule
 

@@ -63,6 +63,17 @@ the binary.
 If `AGENTS.md` exists in the working directory, its content is also injected as
 system instructions.
 
+## Tools
+
+Default tools:
+
+- `read_file`: read workspace files with optional line ranges.
+- `list_files`: list workspace files with optional glob filtering.
+- `search`: search workspace files by regular expression.
+- `apply_patch`: replace expected text in a workspace file.
+- `write_file`: write workspace files and create parent directories.
+- `bash`: run shell commands after approval.
+
 ## Roadmap
 
 - MCP compatibility.
