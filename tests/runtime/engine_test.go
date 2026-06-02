@@ -2,6 +2,7 @@ package runtime_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -99,6 +100,20 @@ type recordingExecutor struct {
 func (x *recordingExecutor) Execute(_ context.Context, effect Effect, _ ExecutionInput, _ func(StreamChunk)) (ExecutionResult, error) {
 	x.effects = append(x.effects, effect)
 	return ModelReplied{Response: ModelResponse{Content: "from executor"}}, nil
+}
+
+type failingOnceExecutor struct {
+	calls int
+	seen  []Message
+}
+
+func (x *failingOnceExecutor) Execute(_ context.Context, _ Effect, input ExecutionInput, _ func(StreamChunk)) (ExecutionResult, error) {
+	x.calls++
+	x.seen = append([]Message(nil), input.Messages...)
+	if x.calls == 1 {
+		return nil, errors.New("provider timeout")
+	}
+	return ModelReplied{Response: ModelResponse{Content: "recovered"}}, nil
 }
 
 type recordingPolicy struct {
@@ -240,6 +255,40 @@ func TestEngineRunsEffectsThroughInjectedExecutor(t *testing.T) {
 	}
 	if got := engine.Messages()[1]; got.Content != "from executor" {
 		t.Fatalf("assistant message = %+v", got)
+	}
+}
+
+func TestEngineRecordsRuntimeErrorInMessagesForNextTurn(t *testing.T) {
+	executor := &failingOnceExecutor{}
+	engine := NewEngineWithExecutor(executor, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	if err := session.RunTurn(context.Background(), "hi", events, approvals); err == nil {
+		t.Fatal("RunTurn succeeded, want provider error")
+	}
+	for range events {
+	}
+
+	messages := engine.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("messages = %+v, want user plus runtime error", messages)
+	}
+	if got := messages[1]; got.Role != RoleTool || got.ToolName != "runtime_error" || got.Content != "provider timeout" {
+		t.Fatalf("runtime error message = %+v", got)
+	}
+
+	runSession(t, engine, "continue")
+
+	if len(executor.seen) != 3 {
+		t.Fatalf("second model input = %+v, want previous user, runtime error, new user", executor.seen)
+	}
+	if got := executor.seen[1]; got.ToolName != "runtime_error" || got.Content != "provider timeout" {
+		t.Fatalf("second model input missing runtime error: %+v", executor.seen)
 	}
 }
 

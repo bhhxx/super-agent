@@ -202,19 +202,19 @@ func TestTransitionTable(t *testing.T) {
 			name: "ErrorOccurred/WaitingLLM->Idle", state: StateWaitingLLM,
 			event:         ErrorOccurred{Err: errors.New("boom")},
 			wantState:     StateIdle,
-			mutationCount: 4, // FlushStreamingAssistant + ClearPendingTool + ClearQueuedToolCalls + ClearPendingEffects
+			mutationCount: 5, // FlushStreamingAssistant + AppendToolResult + ClearPendingTool + ClearQueuedToolCalls + ClearPendingEffects
 		},
 		{
 			name: "ErrorOccurred/RunningTool->Idle", state: StateRunningTool,
 			event:         ErrorOccurred{Err: errors.New("boom")},
 			wantState:     StateIdle,
-			mutationCount: 4,
+			mutationCount: 5,
 		},
 		{
 			name: "ErrorOccurred/AdvancingQueue->Idle", state: StateAdvancingQueue,
 			event:         ErrorOccurred{Err: errors.New("boom")},
 			wantState:     StateIdle,
-			mutationCount: 4,
+			mutationCount: 5,
 		},
 
 		// --- CancelRequested ---

@@ -12,6 +12,13 @@ func toolCallKey(call ToolCall) string {
 	return call.Name + "\x00" + call.Input
 }
 
+func runtimeErrorMessage(err error) string {
+	if err == nil {
+		return "unknown runtime error"
+	}
+	return err.Error()
+}
+
 func Transition(state State, event Event) (TransitionResult, error) {
 	switch ev := event.(type) {
 	case UserMessageSubmitted:
@@ -159,6 +166,10 @@ func Transition(state State, event Event) (TransitionResult, error) {
 			NextState: StateIdle,
 			Mutations: []Mutation{
 				FlushStreamingAssistant{Interrupted: true},
+				AppendToolResult{
+					Call:   ToolCall{ID: "runtime_error", Name: "runtime_error"},
+					Result: runtimeErrorMessage(ev.Err),
+				},
 				ClearPendingTool{},
 				ClearQueuedToolCalls{},
 				ClearPendingEffects{},
