@@ -13,8 +13,9 @@ type Tool interface {
 }
 
 type Registry struct {
-	order []string
-	tools map[string]Tool
+	order      []string
+	tools      map[string]Tool
+	checkpoint func(runtime.ToolCall)
 }
 
 func NewRegistry(items ...Tool) *Registry {
@@ -27,6 +28,10 @@ func NewRegistry(items ...Tool) *Registry {
 		registry.tools[name] = item
 	}
 	return registry
+}
+
+func (r *Registry) SetCheckpointCallback(callback func(runtime.ToolCall)) {
+	r.checkpoint = callback
 }
 
 func DefaultRegistry() *Registry {
@@ -57,6 +62,9 @@ func (r *Registry) Run(ctx context.Context, call runtime.ToolCall) (string, erro
 	tool, ok := r.tools[call.Name]
 	if !ok {
 		return "", errors.New("unknown tool: " + call.Name)
+	}
+	if tool.Spec().Risky && r.checkpoint != nil {
+		r.checkpoint(call)
 	}
 	return tool.Run(ctx, call)
 }

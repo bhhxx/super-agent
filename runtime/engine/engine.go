@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 )
 
@@ -194,6 +195,48 @@ func (e *Engine) Reset() error {
 	e.runs.CancelRun()
 	e.runs.StartNewGeneration()
 	return e.dispatch(ResetRequested{})
+}
+
+func (e *Engine) ReplaceMessages(messages []Message) {
+	e.runs.CancelRun()
+	e.runs.StartNewGeneration()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.state.Messages = append([]Message(nil), messages...)
+	e.state.PendingTool = nil
+	e.state.ToolBatch = nil
+	e.state.StreamingContent = ""
+	e.state.StreamingReasoning = ""
+	e.state.State = StateIdle
+	e.scheduler.Clear()
+}
+
+func (e *Engine) CompactSummary(ctx context.Context) (string, error) {
+	messages := e.Messages()
+	if len(messages) == 0 {
+		return "", nil
+	}
+	prompt := Message{
+		Role:    RoleUser,
+		Content: "Summarize this conversation for context compaction. Preserve goals, decisions, files changed, tool results, and unresolved next steps.",
+	}
+	input := ExecutionInput{Messages: append(messages, prompt), ToolSpecs: nil}
+	outcome, err := e.runner.Run(ctx, QueuedEffect{Effect: CallModel{}}, input, nil)
+	if err != nil {
+		return "", err
+	}
+	reply, ok := outcome.Result.(ModelReplied)
+	if !ok {
+		return "", errors.New("compact summary did not return a model response")
+	}
+	summary := strings.TrimSpace(reply.Response.Content)
+	if summary == "" {
+		summary = strings.TrimSpace(reply.Response.ReasoningContent)
+	}
+	if summary == "" {
+		return "", errors.New("compact summary is empty")
+	}
+	return summary, nil
 }
 
 func (e *Engine) DispatchEventThenRunEffects(ctx context.Context, event Event, chunkFunc func(StreamChunk), afterDispatch func()) error {

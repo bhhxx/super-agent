@@ -19,7 +19,10 @@ const (
 
 type Role = model.Role
 
-const RoleAssistant = model.RoleAssistant
+const (
+	RoleUser      = model.RoleUser
+	RoleAssistant = model.RoleAssistant
+)
 
 type Message = model.Message
 type ToolCall = model.ToolCall
@@ -55,6 +58,7 @@ type EventClassifyInput = execution.EventClassifyInput
 type EffectExecutor = execution.EffectExecutor
 type ExecutionInput = execution.ExecutionInput
 type ExecutionResult = execution.ExecutionResult
+type ModelReplied = execution.ModelReplied
 type EffectRunner = execution.EffectRunner
 type QueuedEffect = execution.QueuedEffect
 type EffectScheduler = execution.EffectScheduler
@@ -65,6 +69,7 @@ type RunController = execution.RunController
 type DefaultResultResolver = execution.DefaultResultResolver
 type DefaultEffectRunner = execution.DefaultEffectRunner
 type DefaultEventClassifier = execution.DefaultEventClassifier
+type CallModel = machine.CallModel
 
 var NewApprovalKey = execution.NewApprovalKey
 var NewMemoryApprovalStore = execution.NewMemoryApprovalStore

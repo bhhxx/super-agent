@@ -9,7 +9,7 @@ func newSnapshotEmitter() *snapshotEmitter {
 	return &snapshotEmitter{}
 }
 
-func (se *snapshotEmitter) emit(events chan<- SessionEvent, snapshot Snapshot) {
+func (se *snapshotEmitter) emit(events chan<- SessionEvent, snapshot Snapshot, onMessage func(Message)) {
 	events <- StateChanged{State: snapshot.State}
 	if snapshot.PendingTool != nil {
 		if se.emittedApproval == nil || *se.emittedApproval != *snapshot.PendingTool {
@@ -34,6 +34,9 @@ func (se *snapshotEmitter) emit(events chan<- SessionEvent, snapshot Snapshot) {
 	}
 	for _, msg := range messages[se.emittedMessages:] {
 		events <- MessageAppended{Message: msg}
+		if onMessage != nil {
+			onMessage(msg)
+		}
 	}
 	se.emittedMessages = len(messages)
 }

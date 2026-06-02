@@ -125,6 +125,12 @@ type Conversation interface {
 	RunTurn(context.Context, string, chan<- runtime.SessionEvent, <-chan runtime.ApprovalDecision) error
 	Cancel() error
 	Reset() error
+	Sessions() ([]runtime.SessionSummary, error)
+	Resume(runtime.SessionID) error
+	Rename(runtime.SessionID, string) error
+	DeleteSession(runtime.SessionID) error
+	Compact(context.Context, string, int) error
+	Undo() error
 }
 
 type submitDoneMsg struct {
@@ -262,7 +268,7 @@ func (a App) welcomeString() string {
 	}
 	b.WriteString(fmt.Sprintf("**Model:** %s/%s  ", a.info.Provider, a.info.ModelName))
 	b.WriteString(fmt.Sprintf("**Tools:** %s  **Approval:** %s\n\n", toolsLabel, approveLabel))
-	b.WriteString("**Commands:** `/help` `/clear` `/quit`\n")
+	b.WriteString("**Commands:** `/help` `/clear` `/sessions` `/resume <id>` `/compact` `/undo` `/quit`\n")
 	return a.renderMarkdown(b.String())
 }
 
@@ -312,6 +318,18 @@ func (a App) footerView() string {
 	b.WriteString(footerText + strings.Repeat(" ", padding) + stats)
 
 	return b.String()
+}
+
+func (a *App) refreshSnapshot() {
+	snapshot := a.session.Snapshot()
+	a.state = snapshot.State
+	a.messages = append([]runtime.Message(nil), snapshot.Messages...)
+	a.pendingTool = snapshot.PendingTool
+	a.streamingMessage = snapshot.StreamingMessage
+	a.pendingToolIndex = snapshot.PendingToolBatchIndex + 1
+	a.pendingToolTotal = snapshot.PendingToolBatchTotal
+	a.viewport.SetContent(a.contentString())
+	a.viewport.GotoBottom()
 }
 
 func (a App) renderMarkdown(content string) string {
@@ -646,6 +664,10 @@ func (a App) helpView() string {
 
 	items := []string{
 		a.styles.CommandLabel.Render("/clear") + "    Reset conversation",
+		a.styles.CommandLabel.Render("/sessions") + " List saved sessions",
+		a.styles.CommandLabel.Render("/resume") + "   Resume saved session",
+		a.styles.CommandLabel.Render("/compact") + "  Compact context",
+		a.styles.CommandLabel.Render("/undo") + "     Restore checkpoint",
 		a.styles.CommandLabel.Render("/help") + "     Show this menu",
 		a.styles.CommandLabel.Render("/quit") + "     Exit application",
 		"",
@@ -665,6 +687,17 @@ func (a App) helpView() string {
 
 	content := title + "\n\n" + strings.Join(items, "\n")
 	return helpStyle.Render(content)
+}
+
+func formatSessions(summaries []runtime.SessionSummary) string {
+	if len(summaries) == 0 {
+		return "No saved sessions"
+	}
+	var lines []string
+	for _, summary := range summaries {
+		lines = append(lines, fmt.Sprintf("%s  %s  %s/%s", summary.ID, summary.Title, summary.Provider, summary.Model))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (a App) View() string {
@@ -712,12 +745,72 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 			} else {
 				a.err = ""
 			}
-			a.state = runtime.StateIdle
-			a.messages = nil
-			a.pendingTool = nil
-			a.streamingMessage = nil
-			a.viewport.SetContent("")
+			a.refreshSnapshot()
 			a.lastActivity = "Conversation reset"
+			a.input.SetValue("")
+			return a, nil
+		case "/sessions":
+			summaries, err := a.session.Sessions()
+			if err != nil {
+				a.err = "Sessions failed: " + err.Error()
+			} else {
+				a.err = ""
+				a.status = formatSessions(summaries)
+			}
+			a.input.SetValue("")
+			return a, nil
+		case "/resume":
+			if len(parts) < 2 {
+				a.err = "Usage: /resume <id>"
+			} else if err := a.session.Resume(runtime.SessionID(parts[1])); err != nil {
+				a.err = "Resume failed: " + err.Error()
+			} else {
+				a.err = ""
+				a.status = "Resumed " + parts[1]
+				a.refreshSnapshot()
+			}
+			a.input.SetValue("")
+			return a, nil
+		case "/rename":
+			if len(parts) < 3 {
+				a.err = "Usage: /rename <id> <title>"
+			} else if err := a.session.Rename(runtime.SessionID(parts[1]), strings.TrimSpace(strings.TrimPrefix(text, parts[0]+" "+parts[1]))); err != nil {
+				a.err = "Rename failed: " + err.Error()
+			} else {
+				a.err = ""
+				a.status = "Renamed " + parts[1]
+			}
+			a.input.SetValue("")
+			return a, nil
+		case "/delete-session":
+			if len(parts) < 2 {
+				a.err = "Usage: /delete-session <id>"
+			} else if err := a.session.DeleteSession(runtime.SessionID(parts[1])); err != nil {
+				a.err = "Delete failed: " + err.Error()
+			} else {
+				a.err = ""
+				a.status = "Deleted " + parts[1]
+			}
+			a.input.SetValue("")
+			return a, nil
+		case "/compact":
+			summary := strings.TrimSpace(strings.TrimPrefix(text, parts[0]))
+			if err := a.session.Compact(context.Background(), summary, 4); err != nil {
+				a.err = "Compact failed: " + err.Error()
+			} else {
+				a.err = ""
+				a.status = "Compacted conversation"
+				a.refreshSnapshot()
+			}
+			a.input.SetValue("")
+			return a, nil
+		case "/undo":
+			if err := a.session.Undo(); err != nil {
+				a.err = "Undo failed: " + err.Error()
+			} else {
+				a.err = ""
+				a.status = "Restored last checkpoint"
+			}
 			a.input.SetValue("")
 			return a, nil
 		case "/quit", "/exit":

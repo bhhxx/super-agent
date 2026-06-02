@@ -273,6 +273,30 @@ func (c *eventOnlyConversation) Reset() error {
 	return nil
 }
 
+func (c *eventOnlyConversation) Sessions() ([]runtime.SessionSummary, error) {
+	return nil, nil
+}
+
+func (c *eventOnlyConversation) Resume(runtime.SessionID) error {
+	return nil
+}
+
+func (c *eventOnlyConversation) Rename(runtime.SessionID, string) error {
+	return nil
+}
+
+func (c *eventOnlyConversation) DeleteSession(runtime.SessionID) error {
+	return nil
+}
+
+func (c *eventOnlyConversation) Compact(context.Context, string, int) error {
+	return nil
+}
+
+func (c *eventOnlyConversation) Undo() error {
+	return nil
+}
+
 func runCommandAsync(t *testing.T, cmd tea.Cmd) <-chan tea.Msg {
 	t.Helper()
 	done := make(chan tea.Msg, 1)

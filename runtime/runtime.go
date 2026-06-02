@@ -6,6 +6,7 @@ import (
 	"super-agent/runtime/machine"
 	"super-agent/runtime/model"
 	"super-agent/runtime/session"
+	"super-agent/runtime/store"
 )
 
 type State = model.State
@@ -205,3 +206,14 @@ type Session = session.Session
 func NewSession(engine *Engine) *Session {
 	return session.NewSession(engine)
 }
+
+func NewPersistentSession(engine *Engine, st *store.Store, meta store.Metadata) *Session {
+	return session.NewPersistentSession(engine, st, meta)
+}
+
+type SessionID = store.SessionID
+type TurnID = store.TurnID
+type SessionMetadata = store.Metadata
+type SessionSummary = store.Summary
+type SessionRecord = store.Record
+type SessionCheckpoint = store.Checkpoint

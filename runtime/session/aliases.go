@@ -19,3 +19,8 @@ type StreamChunk = model.StreamChunk
 type Engine = enginepkg.Engine
 type Snapshot = enginepkg.Snapshot
 type UserMessageSubmitted = machine.UserMessageSubmitted
+
+const (
+	RoleSystem = model.RoleSystem
+	RoleTool   = model.RoleTool
+)

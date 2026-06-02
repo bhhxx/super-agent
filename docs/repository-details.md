@@ -10,7 +10,8 @@ main.go
        -> llm.NewModel
        -> tools.DefaultRegistry / tools.NoTools
        -> runtime.NewEngine
-       -> runtime.NewSession
+       -> runtime/store.OpenDefault
+       -> runtime.NewPersistentSession
   -> tui.New(session)
 ```
 
@@ -21,6 +22,7 @@ main.go
 - `runtime/execution/`: effect runner, executor, scheduler, resolver, classifier, policy, approvals, run control.
 - `runtime/engine/`: orchestration, state lock, lifecycle, dispatch, stale-result dropping.
 - `runtime/session/`: channel boundary for TUI events and approvals.
+- `runtime/store/`: durable JSONL session metadata, transcripts, checkpoints, compaction records.
 - `llm/`: DeepSeek, OpenAI, Claude adapters.
 - `tools/`: file tools, search, patch/write tools, bash runner, registry, no-tool mode.
 - `tui/`: Bubble Tea event loop and approval UI.
@@ -28,7 +30,20 @@ main.go
 
 ## Project Instructions
 
-`app.NewSession` reads `AGENTS.md` from the current working directory. When present, its contents become the initial `system` message passed to the runtime. OpenAI-compatible providers send it as a chat `system` message. Claude sends it through the Anthropic `system` field. `ResetContext` clears conversation state but preserves `system` messages.
+`app.NewSession` reads `AGENTS.md` from the current working directory. When present, its contents become the initial `system` message passed to the runtime. OpenAI-compatible providers send it as a chat `system` message. Claude sends it through the Anthropic `system` field. `ResetContext` clears conversation state but preserves `system` messages. Persistent replay also preserves system messages across reset records.
+
+## Session Persistence
+
+Sessions are stored under `~/.superagent/sessions/<session-id>/` as `meta.json` plus `events.jsonl`. Metadata includes session id, turn id, timestamps, provider/model, cwd, title, and instruction fingerprint. `runtime/session` owns durable event emission for messages, approvals, tool results, cancel, reset, errors, checkpoints, and compact records. `runtime/store` replays messages for `/resume`.
+
+TUI commands:
+
+- `/sessions`: list saved sessions.
+- `/resume <id>`: load a prior transcript into the current engine.
+- `/rename <id> <title>`: update session title.
+- `/delete-session <id>`: remove an inactive saved session.
+- `/compact [summary]`: summarize with the model when no summary is supplied, replace older non-system context with one summary message, and store original messages.
+- `/undo`: restore the latest checkpoint file snapshot.
 
 ## Default Tools
 
@@ -75,6 +90,7 @@ Tool approval is a pre-transition classification step. `ToolCallsReceived` start
 - `runtime/execution/result_resolver.go`: maps execution results to raw events.
 - `runtime/execution/event_classifier.go`: converts tool availability into approval or execution events.
 - `runtime/session/session.go`: serializes turns and emits UI-facing session events.
+- `runtime/store/store.go`: writes and replays durable session records.
 - `runtime/runtime.go`: re-exports runtime API surface for app/tests.
 
 ## Transition Table
