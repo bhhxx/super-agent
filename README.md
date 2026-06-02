@@ -72,6 +72,11 @@ Default tools:
 - `search`: search workspace files by regular expression.
 - `apply_patch`: replace expected text in a workspace file.
 - `write_file`: write workspace files and create parent directories.
+- `run_command`: run workspace commands with cwd, timeout, and output limits.
+- `go_test`: run `go test` for workspace packages.
+- `format`: run `gofmt -w` on workspace files.
+- `git_status`: show `git status --short`.
+- `git_diff`: show `git diff` for optional paths.
 - `bash`: run shell commands after approval.
 
 ## Roadmap

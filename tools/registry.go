@@ -36,6 +36,11 @@ func DefaultRegistry() *Registry {
 		SearchTool{},
 		ApplyPatchTool{},
 		WriteFileTool{},
+		RunCommandTool{},
+		GoTestTool{},
+		FormatTool{},
+		GitStatusTool{},
+		GitDiffTool{},
 		BashTool{},
 	)
 }

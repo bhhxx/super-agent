@@ -32,7 +32,7 @@ main.go
 
 ## Default Tools
 
-`tools.DefaultRegistry` exposes `read_file`, `list_files`, `search`, `apply_patch`, `write_file`, and `bash`. File-oriented tools use structured JSON inputs and reject paths outside the current working directory. `apply_patch`, `write_file`, and `bash` are risky tools and require approval unless auto-approval is enabled.
+`tools.DefaultRegistry` exposes `read_file`, `list_files`, `search`, `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, `git_status`, `git_diff`, and `bash`. File-oriented tools use structured JSON inputs and reject paths outside the current working directory. `run_command` supports cwd, timeout, and output limits. `git_status` and `git_diff` are read-only. `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, and `bash` are risky tools and require approval unless auto-approval is enabled.
 
 ## Runtime Rule
 
