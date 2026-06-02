@@ -3,6 +3,7 @@ package app_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	. "super-agent/app"
@@ -93,6 +94,63 @@ func TestLoadConfigUsesSettingsPermissionMode(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsInvalidPermissionMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, ".superagent")
+	if err := os.MkdirAll(settingsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	settings := `{"provider":"openai","permissions":{"mode":"root"},"providers":{"openai":{"api_key":"key","model":"model"}}}`
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(settings), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadConfig(Flags{}, lookup(nil))
+
+	if err == nil || !strings.Contains(err.Error(), "invalid permission mode: root") {
+		t.Fatalf("err = %v, want invalid permission mode", err)
+	}
+}
+
+func TestLoadConfigRejectsInvalidSandboxBackend(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, ".superagent")
+	if err := os.MkdirAll(settingsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	settings := `{"provider":"openai","sandbox":{"backend":"docker"},"providers":{"openai":{"api_key":"key","model":"model"}}}`
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(settings), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadConfig(Flags{}, lookup(nil))
+
+	if err == nil || !strings.Contains(err.Error(), "invalid sandbox backend: docker") {
+		t.Fatalf("err = %v, want invalid sandbox backend", err)
+	}
+}
+
+func TestLoadConfigRequiresOpenSandboxID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, ".superagent")
+	if err := os.MkdirAll(settingsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	settings := `{"provider":"openai","sandbox":{"backend":"opensandbox"},"providers":{"openai":{"api_key":"key","model":"model"}}}`
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(settings), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadConfig(Flags{}, lookup(nil))
+
+	if err == nil || !strings.Contains(err.Error(), "sandbox.opensandbox_id is required") {
+		t.Fatalf("err = %v, want missing opensandbox id", err)
+	}
+}
+
 func TestLoadConfigCreatesDefaultSettingsWhenMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -128,6 +186,15 @@ func TestLoadSettingsFileCreatesTemplateWhenMissing(t *testing.T) {
 	}
 	if settings.Providers["deepseek"].Model != "deepseek-reasoner" {
 		t.Fatalf("deepseek config = %+v", settings.Providers["deepseek"])
+	}
+	if settings.Permissions.Mode != "ask" || settings.Permissions.Network != "deny" {
+		t.Fatalf("permissions template = %+v", settings.Permissions)
+	}
+	if settings.Sandbox.Backend != "local" || settings.Sandbox.OpenSandboxCLI != "osb" || settings.Sandbox.OpenSandboxCWD != "/workspace" {
+		t.Fatalf("sandbox template = %+v", settings.Sandbox)
+	}
+	if !strings.Contains(string(content), `"sandbox"`) || !strings.Contains(string(content), `"permissions"`) {
+		t.Fatalf("generated settings missing discoverable permissions/sandbox sections: %s", string(content))
 	}
 }
 

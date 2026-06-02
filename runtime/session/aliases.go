@@ -28,6 +28,8 @@ const (
 	PermissionModeAsk = execution.PermissionModeAsk
 )
 
+var ValidPermissionMode = execution.ValidPermissionMode
+
 const (
 	RoleSystem = model.RoleSystem
 	RoleTool   = model.RoleTool

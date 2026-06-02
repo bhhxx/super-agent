@@ -123,6 +123,10 @@ func NewPolicy(mode PermissionMode, rules PermissionRules) *DefaultPolicy {
 	return execution.NewPolicy(mode, rules)
 }
 
+func ValidPermissionMode(mode PermissionMode) bool {
+	return execution.ValidPermissionMode(mode)
+}
+
 type ApprovalKey = execution.ApprovalKey
 type ApprovalStore = execution.ApprovalStore
 type MemoryApprovalStore = execution.MemoryApprovalStore

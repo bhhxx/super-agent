@@ -84,6 +84,37 @@ func TestRunCommandUsesOpenSandboxBackendWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestRunCommandUsesOpenSandboxCLIArguments(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "args")
+	uv := filepath.Join(dir, "uv")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + log + "\nprintf sandbox-output\n"
+	if err := os.WriteFile(uv, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	tool := RunCommandTool{Config: Config{
+		OpenSandboxID:  "sbx-1",
+		OpenSandboxCLI: uv + " --directory /home/bhhxx/OpenSandbox/cli run osb",
+		OpenSandboxCWD: "/workspace",
+	}}
+
+	out, err := tool.Run(context.Background(), runtime.ToolCall{Name: "run_command", Input: `{"command":"pwd","timeout_seconds":5}`})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if out != "sandbox-output" {
+		t.Fatalf("out = %q, want sandbox-output", out)
+	}
+	args, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "--directory\n/home/bhhxx/OpenSandbox/cli\nrun\nosb\ncommand\nrun\nsbx-1\n-o\nraw\n--workdir\n/workspace\n--timeout\n5s\n--\nbash\n-lc\npwd\n"
+	if string(args) != want {
+		t.Fatalf("args = %q, want %q", string(args), want)
+	}
+}
+
 func TestGoTestRunsPackages(t *testing.T) {
 	t.Chdir(t.TempDir())
 	mustWrite(t, "go.mod", "module example.com/x\n\ngo 1.24\n")

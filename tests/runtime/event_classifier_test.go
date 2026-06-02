@@ -85,6 +85,18 @@ func TestPlanModeDeniesWriteTool(t *testing.T) {
 	}
 }
 
+func TestPlanModeDeniesShellWrites(t *testing.T) {
+	policy := NewPolicy(PermissionModePlan, PermissionRules{})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"touch build.txt"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+
+	if decision != DecisionDenied {
+		t.Fatalf("decision = %v, want denied", decision)
+	}
+}
+
 func TestDestructiveCommandNeedsApproval(t *testing.T) {
 	policy := NewPolicy(PermissionModeAcceptEdits, PermissionRules{})
 
@@ -155,5 +167,23 @@ func TestApprovalStoreStoresPermissionPolicy(t *testing.T) {
 	rules := store.PermissionRules()
 	if len(rules.AllowTools) != 1 || rules.AllowTools[0] != "read_file" {
 		t.Fatalf("rules = %+v, want read_file allow rule", rules)
+	}
+}
+
+func TestEngineRejectsInvalidPermissionMode(t *testing.T) {
+	engine := NewEngineWithComponents(
+		NewDefaultEffectRunner(NewDefaultEffectExecutor(nil, nil)),
+		DefaultResultResolver{},
+		NewDefaultEventClassifier(NewDefaultPolicy(), NewMemoryApprovalStore()),
+		DefaultReducer{},
+		NewDefaultRunController(),
+		NewMemoryApprovalStore(),
+		nil,
+	)
+
+	err := engine.SetPermissionPolicy(PermissionMode("root"), PermissionRules{})
+
+	if err == nil || err.Error() != "invalid permission mode: root" {
+		t.Fatalf("err = %v, want invalid permission mode", err)
 	}
 }

@@ -90,6 +90,10 @@ type TUIInfo struct {
 	ModelName      string
 	AutoApprove    bool
 	PermissionMode string
+	SandboxBackend string
+	OpenSandboxID  string
+	OpenSandboxCLI string
+	OpenSandboxCWD string
 	NoTools        bool
 	CWD            string
 	MemoryPaths    []string
@@ -745,7 +749,21 @@ func formatMemory(paths []string) string {
 
 func formatPermissions(info TUIInfo) string {
 	mode := firstNonEmpty(info.PermissionMode, "ask")
-	return fmt.Sprintf("Permission mode: %s\nTools: %s\nApproval: %s\nCWD: %s", mode, onOff(!info.NoTools), onOff(info.AutoApprove), info.CWD)
+	backend := firstNonEmpty(info.SandboxBackend, "local")
+	sandbox := "Sandbox: local command execution"
+	if backend == "opensandbox" && info.OpenSandboxID != "" {
+		sandbox = fmt.Sprintf("Sandbox: opensandbox id=%s cli=%s cwd=%s", info.OpenSandboxID, firstNonEmpty(info.OpenSandboxCLI, "osb"), firstNonEmpty(info.OpenSandboxCWD, "/workspace"))
+	} else if backend == "opensandbox" {
+		sandbox = "Sandbox: opensandbox configured but opensandbox_id is missing"
+	}
+	return fmt.Sprintf(
+		"Permission mode: %s\nTools: %s\nApproval: %s\nCWD: %s\n%s\nEnable OpenSandbox in ~/.superagent/settings.json with sandbox.backend=opensandbox and sandbox.opensandbox_id=<id>",
+		mode,
+		onOff(!info.NoTools),
+		onOff(info.AutoApprove),
+		info.CWD,
+		sandbox,
+	)
 }
 
 func onOff(enabled bool) string {

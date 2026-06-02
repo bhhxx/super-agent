@@ -53,7 +53,7 @@ TUI commands:
 
 ## Default Tools
 
-`tools.DefaultRegistry` exposes `read_file`, `list_files`, `search`, `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, `git_status`, `git_diff`, and `bash`. File-oriented tools use structured JSON inputs and reject paths outside the current working directory. `run_command` supports cwd, timeout, and output limits. `git_status` and `git_diff` are read-only. `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, and `bash` are risky tools and require policy approval unless the active mode allows them. When configured with an OpenSandbox id, `run_command` and `bash` execute through `osb command run <sandbox-id> -o raw -- bash -lc <command>`.
+`tools.DefaultRegistry` exposes `read_file`, `list_files`, `search`, `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, `git_status`, `git_diff`, and `bash`. File-oriented tools use structured JSON inputs and reject paths outside the current working directory. `run_command` supports cwd, timeout, and output limits. `git_status` and `git_diff` are read-only. `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, and `bash` are risky tools and require policy approval unless the active mode allows them. When configured with an OpenSandbox id, `run_command` and `bash` execute through configured `opensandbox_cli` argv plus `command run <sandbox-id> -o raw -- bash -lc <command>`.
 
 ## Runtime Rule
 
@@ -146,13 +146,13 @@ Tool approval is a pre-transition classification step. `ToolCallsReceived` start
   "sandbox": {
     "backend": "opensandbox",
     "opensandbox_id": "sandbox-id",
-    "opensandbox_cli": "osb",
+    "opensandbox_cli": "uv --directory /home/bhhxx/OpenSandbox/cli run osb",
     "opensandbox_cwd": "/workspace"
   }
 }
 ```
 
-Supported modes are `ask`, `accept-edits`, `plan`, and `bypass`; `--yolo` maps to `bypass`. If the settings file is missing, the app creates a template on startup.
+Supported modes are `ask`, `accept-edits`, `plan`, and `bypass`; `--yolo` maps to `bypass`. Supported sandbox backends are `local` and `opensandbox`. `opensandbox` requires `opensandbox_id`; invalid modes, invalid backends, and missing OpenSandbox ids fail config load. `opensandbox_cli` accepts either `osb` or an argv string such as `uv --directory /home/bhhxx/OpenSandbox/cli run osb`. If the settings file is missing, the app creates a template on startup.
 
 ## Build
 

@@ -81,5 +81,6 @@ var NewDefaultEffectRunner = execution.NewDefaultEffectRunner
 var NewDefaultEventClassifier = execution.NewDefaultEventClassifier
 var NewDefaultPolicy = execution.NewDefaultPolicy
 var NewPolicy = execution.NewPolicy
+var ValidPermissionMode = execution.ValidPermissionMode
 var NewDefaultRunController = execution.NewDefaultRunController
 var NewEffectScheduler = execution.NewEffectScheduler

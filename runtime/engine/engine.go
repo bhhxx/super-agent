@@ -237,6 +237,9 @@ func (e *Engine) ReplaceMessages(messages []Message) {
 func (e *Engine) SetPermissionPolicy(mode PermissionMode, rules PermissionRules) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if !ValidPermissionMode(mode) {
+		return errors.New("invalid permission mode: " + string(mode))
+	}
 	setter, ok := e.classifier.(policySetter)
 	if !ok {
 		return errors.New("event classifier does not support policy updates")

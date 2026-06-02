@@ -68,6 +68,15 @@ func NewPolicy(mode PermissionMode, rules PermissionRules) *DefaultPolicy {
 	return &DefaultPolicy{mode: mode, rules: rules}
 }
 
+func ValidPermissionMode(mode PermissionMode) bool {
+	switch mode {
+	case PermissionModeAsk, PermissionModeAcceptEdits, PermissionModePlan, PermissionModeBypass:
+		return true
+	default:
+		return false
+	}
+}
+
 func (p *DefaultPolicy) Mode() PermissionMode {
 	return p.mode
 }

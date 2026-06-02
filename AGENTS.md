@@ -49,4 +49,5 @@
 - Runtime switches come from `.env` and environment variables.
 - LLM provider config comes from `~/.superagent/settings.json`.
 - Permission mode and allow/deny rules come from `~/.superagent/settings.json`.
-- Command sandboxing can route through OpenSandbox when `sandbox.backend` is `opensandbox` and `sandbox.opensandbox_id` is set.
+- Command sandboxing routes through OpenSandbox only when `sandbox.backend` is `opensandbox` and `sandbox.opensandbox_id` is set; missing ids fail config load.
+- `sandbox.opensandbox_cli` may be `osb` or an argv string such as `uv --directory /home/bhhxx/OpenSandbox/cli run osb`.

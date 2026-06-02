@@ -2,6 +2,7 @@ package tui_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -248,6 +249,28 @@ func TestMemoryCommandDisplaysLoadedSources(t *testing.T) {
 	}
 }
 
+func TestPermissionsModeCommandRejectsInvalidMode(t *testing.T) {
+	session := &eventOnlyConversation{permissionErr: errors.New("invalid permission mode: root")}
+	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model", PermissionMode: "ask"})
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	for _, r := range "/permissions mode root" {
+		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := model.View()
+	if !strings.Contains(view, "Permissions failed: invalid permission mode: root") {
+		t.Fatalf("view = %q, want invalid permission mode error", view)
+	}
+	if strings.Contains(view, "mode:root") {
+		t.Fatalf("view = %q, mode should stay ask", view)
+	}
+	if session.permissionMode != "root" {
+		t.Fatalf("permissionMode call = %q, want root", session.permissionMode)
+	}
+}
+
 type approvalModel struct {
 	responses []runtime.ModelResponse
 }
@@ -272,6 +295,8 @@ func (t *recordingTools) Specs() []runtime.ToolSpec {
 
 type eventOnlyConversation struct {
 	rejectSnapshots bool
+	permissionMode  runtime.PermissionMode
+	permissionErr   error
 }
 
 func (c *eventOnlyConversation) Snapshot() runtime.Snapshot {
@@ -322,8 +347,9 @@ func (c *eventOnlyConversation) Undo() error {
 	return nil
 }
 
-func (c *eventOnlyConversation) SetPermissionMode(runtime.PermissionMode) error {
-	return nil
+func (c *eventOnlyConversation) SetPermissionMode(mode runtime.PermissionMode) error {
+	c.permissionMode = mode
+	return c.permissionErr
 }
 
 func runCommandAsync(t *testing.T, cmd tea.Cmd) <-chan tea.Msg {

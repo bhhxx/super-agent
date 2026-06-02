@@ -96,6 +96,9 @@ func (s *Session) SetPermissionMode(mode PermissionMode) error {
 	if mode == "" {
 		mode = PermissionModeAsk
 	}
+	if !ValidPermissionMode(mode) {
+		return errors.New("invalid permission mode: " + string(mode))
+	}
 	if err := s.engine.SetPermissionPolicy(mode, s.permissionRules); err != nil {
 		return err
 	}

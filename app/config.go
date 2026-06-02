@@ -23,6 +23,7 @@ type Config struct {
 	NoTools            bool
 	PermissionMode     runtime.PermissionMode
 	PermissionRules    runtime.PermissionRules
+	Sandbox            SandboxSettings
 	ModelConfig        llm.Config
 	InstructionSources []string
 }
@@ -72,6 +73,15 @@ func DefaultSettings() Settings {
 				Model:  "claude-3-7-sonnet-20250219",
 			},
 		},
+		Permissions: PermissionSettings{
+			Mode:    "ask",
+			Network: "deny",
+		},
+		Sandbox: SandboxSettings{
+			Backend:        "local",
+			OpenSandboxCLI: "osb",
+			OpenSandboxCWD: "/workspace",
+		},
 	}
 }
 
@@ -96,6 +106,15 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 	if flags.AutoApproveTools || envTrue(lookup, "YOLO") {
 		mode = runtime.PermissionModeBypass
 	}
+	if !runtime.ValidPermissionMode(mode) {
+		return Config{}, errors.New("invalid permission mode: " + string(mode))
+	}
+	if settings.Sandbox.Backend != "local" && settings.Sandbox.Backend != "opensandbox" {
+		return Config{}, errors.New("invalid sandbox backend: " + settings.Sandbox.Backend)
+	}
+	if settings.Sandbox.Backend == "opensandbox" && settings.Sandbox.OpenSandboxID == "" {
+		return Config{}, errors.New("sandbox.opensandbox_id is required when sandbox.backend is opensandbox")
+	}
 	rules := runtime.PermissionRules{
 		AllowTools:     settings.Permissions.AllowTools,
 		DenyTools:      settings.Permissions.DenyTools,
@@ -118,6 +137,7 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 		NoTools:            flags.NoTools || envTrue(lookup, "NO_TOOLS"),
 		PermissionMode:     mode,
 		PermissionRules:    rules,
+		Sandbox:            settings.Sandbox,
 		ModelConfig:        settings.Providers[provider],
 		InstructionSources: instructionSourcePaths(bundle),
 	}, nil
@@ -155,6 +175,7 @@ func LoadSettingsFile(path string) (Settings, error) {
 		if settings.Providers == nil {
 			settings.Providers = map[string]llm.Config{}
 		}
+		normalizeSettings(&settings)
 		return settings, nil
 	}
 	if errors.Is(err, os.ErrNotExist) {
@@ -173,4 +194,22 @@ func LoadSettingsFile(path string) (Settings, error) {
 		return settings, nil
 	}
 	return Settings{}, err
+}
+
+func normalizeSettings(settings *Settings) {
+	if settings.Permissions.Mode == "" {
+		settings.Permissions.Mode = "ask"
+	}
+	if settings.Permissions.Network == "" {
+		settings.Permissions.Network = "deny"
+	}
+	if settings.Sandbox.Backend == "" {
+		settings.Sandbox.Backend = "local"
+	}
+	if settings.Sandbox.OpenSandboxCLI == "" {
+		settings.Sandbox.OpenSandboxCLI = "osb"
+	}
+	if settings.Sandbox.OpenSandboxCWD == "" {
+		settings.Sandbox.OpenSandboxCWD = "/workspace"
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"super-agent/runtime"
 )
@@ -234,7 +235,15 @@ func openSandboxRunner(cfg Config, cwd string) *OpenSandboxCommandRunner {
 }
 
 func (r *OpenSandboxCommandRunner) Run(ctx context.Context, timeoutSeconds int, maxBytes int, command string) (string, error) {
-	args := []string{"command", "run", r.SandboxID, "-o", "raw"}
+	argv, err := splitCommandLine(r.CLI)
+	if err != nil {
+		return "", err
+	}
+	if len(argv) == 0 {
+		return "", errors.New("opensandbox cli is required")
+	}
+	args := append([]string{}, argv[1:]...)
+	args = append(args, "command", "run", r.SandboxID, "-o", "raw")
 	if r.Workdir != "" {
 		args = append(args, "--workdir", r.Workdir)
 	}
@@ -242,7 +251,48 @@ func (r *OpenSandboxCommandRunner) Run(ctx context.Context, timeoutSeconds int, 
 		args = append(args, "--timeout", strconv.Itoa(timeoutSeconds)+"s")
 	}
 	args = append(args, "--", "bash", "-lc", command)
-	return runExec(ctx, "", commandTimeout(timeoutSeconds), outputLimit(maxBytes), r.CLI, args...)
+	return runExec(ctx, "", commandTimeout(timeoutSeconds), outputLimit(maxBytes), argv[0], args...)
+}
+
+func splitCommandLine(value string) ([]string, error) {
+	var args []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	for _, r := range value {
+		switch {
+		case escaped:
+			current.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				current.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case unicode.IsSpace(r):
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if escaped {
+		current.WriteRune('\\')
+	}
+	if quote != 0 {
+		return nil, errors.New("unterminated quote in opensandbox cli")
+	}
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	return args, nil
 }
 
 func runExec(ctx context.Context, cwd string, timeout time.Duration, maxBytes int, name string, args ...string) (string, error) {
