@@ -3,12 +3,12 @@ package runtime
 import "fmt"
 
 type Reducer interface {
-	Apply(state *EngineState, effectQueue *[]QueuedEffect, mutation Mutation)
+	Apply(state *EngineState, clearEffects func(), mutation Mutation)
 }
 
 type DefaultReducer struct{}
 
-func (DefaultReducer) Apply(state *EngineState, effectQueue *[]QueuedEffect, mutation Mutation) {
+func (DefaultReducer) Apply(state *EngineState, clearEffects func(), mutation Mutation) {
 	switch m := mutation.(type) {
 	case AppendUserMessage:
 		state.Messages = append(state.Messages, Message{Role: RoleUser, Content: m.Content})
@@ -31,12 +31,12 @@ func (DefaultReducer) Apply(state *EngineState, effectQueue *[]QueuedEffect, mut
 	case ClearQueuedToolCalls:
 		state.QueuedToolCalls = nil
 	case ClearPendingEffects:
-		*effectQueue = nil
+		clearEffects()
 	case ResetContext:
 		state.Messages = nil
 		state.PendingTool = nil
 		state.QueuedToolCalls = nil
-		*effectQueue = nil
+		clearEffects()
 	default:
 		panic(fmt.Sprintf("unknown mutation: %T", m))
 	}

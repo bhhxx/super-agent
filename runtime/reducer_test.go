@@ -14,6 +14,5 @@ func TestDefaultReducerPanicsOnUnknownMutation(t *testing.T) {
 	}()
 
 	var state EngineState
-	var effectQueue []QueuedEffect
-	DefaultReducer{}.Apply(&state, &effectQueue, unknownMutation{})
+	DefaultReducer{}.Apply(&state, func() {}, unknownMutation{})
 }

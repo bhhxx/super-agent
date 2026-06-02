@@ -3,21 +3,19 @@ package runtime
 import (
 	"context"
 	"errors"
-	"strconv"
 	"sync"
 )
 
 type Engine struct {
-	mu          sync.Mutex
-	runner      EffectRunner
-	resolver    ResultResolver
-	classifier  EventClassifier
-	reducer     Reducer
-	runs        RunController
-	approvals   ApprovalStore
-	state       EngineState
-	effectQueue []QueuedEffect
-	nextEffect  int64
+	mu         sync.Mutex
+	runner     EffectRunner
+	resolver   ResultResolver
+	classifier EventClassifier
+	reducer    Reducer
+	runs       RunController
+	approvals  ApprovalStore
+	state      EngineState
+	scheduler  *EffectScheduler
 }
 
 func NewEngine(model Model, tools ToolRunner, initial []Message) *Engine {
@@ -51,6 +49,7 @@ func NewEngineWithComponents(runner EffectRunner, resolver ResultResolver, class
 		reducer:    reducer,
 		runs:       runs,
 		approvals:  approvals,
+		scheduler:  NewEffectScheduler(),
 		state: EngineState{
 			State:    StateInitializing,
 			Messages: messages,
@@ -216,36 +215,26 @@ func (e *Engine) dispatchLocked(event Event) error {
 func (e *Engine) applyTransitionLocked(decision TransitionResult) error {
 	e.state.State = decision.NextState
 	for _, m := range decision.Mutations {
-		e.reducer.Apply(&e.state, &e.effectQueue, m)
+		e.reducer.Apply(&e.state, e.scheduler.Clear, m)
 	}
 	for _, effect := range decision.Effects {
-		e.effectQueue = append(e.effectQueue, e.queueEffectLocked(effect))
+		e.scheduler.Queue(e.runs.CurrentRunID(), effect)
 	}
 	return nil
-}
-
-func (e *Engine) queueEffectLocked(effect Effect) QueuedEffect {
-	e.nextEffect++
-	return QueuedEffect{
-		RunID:    e.runs.CurrentRunID(),
-		EffectID: EffectID("effect-" + strconv.FormatInt(e.nextEffect, 10)),
-		Effect:   effect,
-	}
 }
 
 func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChunk)) error {
 	runID := e.runs.CurrentRunID()
 	for {
 		e.mu.Lock()
-		if len(e.effectQueue) == 0 {
+		effect, ok := e.scheduler.Pop()
+		if !ok {
 			if e.state.State == StateIdle {
 				e.runs.FinishRun(runID)
 			}
 			e.mu.Unlock()
 			return nil
 		}
-		effect := e.effectQueue[0]
-		e.effectQueue = e.effectQueue[1:]
 		e.mu.Unlock()
 		if err := e.executeEffect(ctx, effect, chunkFunc); err != nil {
 			if errors.Is(err, context.Canceled) {
