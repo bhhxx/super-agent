@@ -94,29 +94,28 @@ type TUIInfo struct {
 }
 
 type App struct {
-	session         Conversation
-	input           textinput.Model
-	viewport        viewport.Model
-	spinner         spinner.Model
-	styles          Styles
-	info            TUIInfo
-	history         []string
-	historyIdx      int
-	ready           bool
-	width           int
-	height          int
-	showHelp        bool
-	err             string
-	status          string
-	lastActivity    string
-	cancel          context.CancelFunc
-	eventsCh        chan runtime.SessionEvent
-	approvalsCh     chan runtime.ApprovalDecision
-	state           runtime.State
-	messages        []runtime.Message
-	pendingTool     *runtime.ToolCall
-	streamContent   string
-	streamReasoning string
+	session          Conversation
+	input            textinput.Model
+	viewport         viewport.Model
+	spinner          spinner.Model
+	styles           Styles
+	info             TUIInfo
+	history          []string
+	historyIdx       int
+	ready            bool
+	width            int
+	height           int
+	showHelp         bool
+	err              string
+	status           string
+	lastActivity     string
+	cancel           context.CancelFunc
+	eventsCh         chan runtime.SessionEvent
+	approvalsCh      chan runtime.ApprovalDecision
+	state            runtime.State
+	messages         []runtime.Message
+	pendingTool      *runtime.ToolCall
+	streamingMessage *runtime.Message
 }
 
 type Conversation interface {
@@ -391,21 +390,21 @@ func (a App) contentString() string {
 		b.WriteString(wrapStyle.Render(msgBlock.String()) + "\n\n")
 	}
 
-	if a.isBusy() {
+	if a.isBusy() && a.streamingMessage != nil {
 		var streamBlock strings.Builder
 		streamBlock.WriteString(a.styles.AgentLabel.Render("AGENT") + "\n")
 
-		if a.streamReasoning != "" {
-			streamBlock.WriteString(a.styles.Thinking.Render(a.streamReasoning))
+		if a.streamingMessage.ReasoningContent != "" {
+			streamBlock.WriteString(a.styles.Thinking.Render(a.streamingMessage.ReasoningContent))
 		}
-		if a.streamContent != "" {
-			if a.streamReasoning != "" {
+		if a.streamingMessage.Content != "" {
+			if a.streamingMessage.ReasoningContent != "" {
 				streamBlock.WriteString("\n\n")
 			}
-			streamBlock.WriteString(a.streamContent)
+			streamBlock.WriteString(a.streamingMessage.Content)
 		}
 
-		if a.streamReasoning != "" || a.streamContent != "" {
+		if a.streamingMessage.ReasoningContent != "" || a.streamingMessage.Content != "" {
 			b.WriteString(wrapStyle.Render(streamBlock.String()) + "\n")
 		}
 	}
@@ -590,13 +589,15 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.pendingTool = nil
 		case runtime.MessageAppended:
 			a.messages = append(a.messages, event.Message)
+			if event.Message.Role == runtime.RoleAssistant {
+				a.streamingMessage = nil
+			}
 		case runtime.SessionError:
 			if !errors.Is(event.Err, context.Canceled) {
 				a.err = event.Err.Error()
 			}
 		case runtime.StreamChunkReceived:
-			a.streamContent += event.Chunk.ContentDelta
-			a.streamReasoning += event.Chunk.ReasoningContentDelta
+			a.streamingMessage = event.Message
 		}
 		a.viewport.SetContent(a.contentString())
 		if a.viewport.AtBottom() {
@@ -702,8 +703,7 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 			a.state = runtime.StateIdle
 			a.messages = nil
 			a.pendingTool = nil
-			a.streamContent = ""
-			a.streamReasoning = ""
+			a.streamingMessage = nil
 			a.viewport.SetContent("")
 			a.lastActivity = "Conversation reset"
 			a.input.SetValue("")
@@ -719,8 +719,7 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 
 	a.err = ""
 	a.lastActivity = text
-	a.streamContent = ""
-	a.streamReasoning = ""
+	a.streamingMessage = nil
 	a.state = runtime.StateWaitingLLM
 	a.pendingTool = nil
 	a.input.SetValue("")
@@ -748,8 +747,7 @@ func (a App) handleApprovalKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		return a, nil
 	}
-	a.streamContent = ""
-	a.streamReasoning = ""
+	a.streamingMessage = nil
 	a.approvalsCh <- action
 	return a, nil
 }

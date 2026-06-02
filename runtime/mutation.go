@@ -9,6 +9,8 @@ var AllMutations = []Mutation{
 	AppendUserMessage{},
 	AppendAssistantMessage{},
 	AppendToolResult{},
+	AppendStreamingAssistant{},
+	FlushStreamingAssistant{},
 	SetPendingTool{},
 	SetQueuedToolCalls{},
 	ClearPendingTool{},
@@ -40,6 +42,18 @@ type AppendToolResult struct {
 }
 
 func (AppendToolResult) isMutation() {}
+
+type AppendStreamingAssistant struct {
+	Chunk StreamChunk
+}
+
+func (AppendStreamingAssistant) isMutation() {}
+
+type FlushStreamingAssistant struct {
+	Interrupted bool
+}
+
+func (FlushStreamingAssistant) isMutation() {}
 
 type SetPendingTool struct {
 	Call ToolCall

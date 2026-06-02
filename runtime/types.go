@@ -28,6 +28,7 @@ type Message struct {
 	ToolCallID       string
 	ToolName         string
 	ToolCalls        []*ToolCall
+	Interrupted      bool
 }
 
 type ToolCall struct {

@@ -202,41 +202,41 @@ func TestTransitionTable(t *testing.T) {
 			name: "ErrorOccurred/WaitingLLM->Idle", state: StateWaitingLLM,
 			event:         ErrorOccurred{Err: errors.New("boom")},
 			wantState:     StateIdle,
-			mutationCount: 3, // ClearPendingTool + ClearQueuedToolCalls + ClearPendingEffects
+			mutationCount: 4, // FlushStreamingAssistant + ClearPendingTool + ClearQueuedToolCalls + ClearPendingEffects
 		},
 		{
 			name: "ErrorOccurred/RunningTool->Idle", state: StateRunningTool,
 			event:         ErrorOccurred{Err: errors.New("boom")},
 			wantState:     StateIdle,
-			mutationCount: 3,
+			mutationCount: 4,
 		},
 		{
 			name: "ErrorOccurred/AdvancingQueue->Idle", state: StateAdvancingQueue,
 			event:         ErrorOccurred{Err: errors.New("boom")},
 			wantState:     StateIdle,
-			mutationCount: 3,
+			mutationCount: 4,
 		},
 
 		// --- CancelRequested ---
 		{
 			name: "CancelRequested/WaitingLLM->Idle", state: StateWaitingLLM,
 			event: CancelRequested{}, wantState: StateIdle,
-			mutationCount: 3,
+			mutationCount: 4,
 		},
 		{
 			name: "CancelRequested/WaitingApproval->Idle", state: StateWaitingApproval,
 			event: CancelRequested{}, wantState: StateIdle,
-			mutationCount: 3,
+			mutationCount: 4,
 		},
 		{
 			name: "CancelRequested/RunningTool->Idle", state: StateRunningTool,
 			event: CancelRequested{}, wantState: StateIdle,
-			mutationCount: 3,
+			mutationCount: 4,
 		},
 		{
 			name: "CancelRequested/AdvancingQueue->Idle", state: StateAdvancingQueue,
 			event: CancelRequested{}, wantState: StateIdle,
-			mutationCount: 3,
+			mutationCount: 4,
 		},
 
 		// --- ResetRequested ---

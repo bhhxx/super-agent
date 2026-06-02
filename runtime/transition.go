@@ -158,6 +158,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		return TransitionResult{
 			NextState: StateIdle,
 			Mutations: []Mutation{
+				FlushStreamingAssistant{Interrupted: true},
 				ClearPendingTool{},
 				ClearQueuedToolCalls{},
 				ClearPendingEffects{},
@@ -167,6 +168,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		return TransitionResult{
 			NextState: StateIdle,
 			Mutations: []Mutation{
+				FlushStreamingAssistant{Interrupted: true},
 				ClearPendingTool{},
 				ClearQueuedToolCalls{},
 				ClearPendingEffects{},

@@ -11,11 +11,31 @@ type DefaultReducer struct{}
 func (DefaultReducer) Apply(state *EngineState, clearEffects func(), mutation Mutation) {
 	switch m := mutation.(type) {
 	case AppendUserMessage:
+		state.StreamingContent = ""
+		state.StreamingReasoning = ""
 		state.Messages = append(state.Messages, Message{Role: RoleUser, Content: m.Content})
 	case AppendAssistantMessage:
+		state.StreamingContent = ""
+		state.StreamingReasoning = ""
 		state.Messages = append(state.Messages, m.Message)
 	case AppendToolResult:
+		state.StreamingContent = ""
+		state.StreamingReasoning = ""
 		state.Messages = append(state.Messages, Message{Role: RoleTool, Content: m.Result, ToolCallID: m.Call.ID, ToolName: m.Call.Name})
+	case AppendStreamingAssistant:
+		state.StreamingContent += m.Chunk.ContentDelta
+		state.StreamingReasoning += m.Chunk.ReasoningContentDelta
+	case FlushStreamingAssistant:
+		if state.StreamingContent != "" || state.StreamingReasoning != "" {
+			state.Messages = append(state.Messages, Message{
+				Role:             RoleAssistant,
+				Content:          state.StreamingContent,
+				ReasoningContent: state.StreamingReasoning,
+				Interrupted:      m.Interrupted,
+			})
+		}
+		state.StreamingContent = ""
+		state.StreamingReasoning = ""
 	case SetPendingTool:
 		call := m.Call
 		state.PendingTool = &call
@@ -36,6 +56,8 @@ func (DefaultReducer) Apply(state *EngineState, clearEffects func(), mutation Mu
 		state.Messages = nil
 		state.PendingTool = nil
 		state.QueuedToolCalls = nil
+		state.StreamingContent = ""
+		state.StreamingReasoning = ""
 		clearEffects()
 	default:
 		panic(fmt.Sprintf("unknown mutation: %T", m))

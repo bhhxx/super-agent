@@ -143,6 +143,86 @@ func (s *blockingApprovalStore) AutoApproveTools() bool {
 	return false
 }
 
+type streamingCancelModel struct {
+	started chan struct{}
+}
+
+func (m streamingCancelModel) Next(ctx context.Context, _ []Message, _ []ToolSpec, chunkFunc func(StreamChunk)) (ModelResponse, error) {
+	chunkFunc(StreamChunk{ContentDelta: "partial", ReasoningContentDelta: "thinking"})
+	close(m.started)
+	<-ctx.Done()
+	return ModelResponse{}, ctx.Err()
+}
+
+func TestCancelFlushesStreamingAssistantMessage(t *testing.T) {
+	started := make(chan struct{})
+	engine := NewEngine(streamingCancelModel{started: started}, &fakeTool{}, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	done := make(chan error, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		done <- session.RunTurn(ctx, "hi", events, approvals)
+	}()
+
+	<-started
+	cancel()
+	<-done
+
+	messages := engine.Messages()
+	if len(messages) != 2 {
+		t.Fatalf("messages = %+v, want user and interrupted assistant", messages)
+	}
+	got := messages[1]
+	if got.Role != RoleAssistant || got.Content != "partial" || got.ReasoningContent != "thinking" || !got.Interrupted {
+		t.Fatalf("assistant message = %+v, want interrupted streamed content", got)
+	}
+	if session.Snapshot().StreamingMessage != nil {
+		t.Fatalf("streaming message = %+v, want nil", session.Snapshot().StreamingMessage)
+	}
+}
+
+func TestSessionStreamEventCarriesAccumulatedStreamingMessage(t *testing.T) {
+	started := make(chan struct{})
+	engine := NewEngine(streamingCancelModel{started: started}, &fakeTool{}, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- session.RunTurn(ctx, "hi", events, approvals)
+	}()
+
+	for ev := range events {
+		stream, ok := ev.(StreamChunkReceived)
+		if !ok {
+			continue
+		}
+		if stream.Message == nil {
+			t.Fatal("stream event missing accumulated message")
+		}
+		if stream.Message.Content != "partial" || stream.Message.ReasoningContent != "thinking" {
+			t.Fatalf("stream message = %+v", stream.Message)
+		}
+		cancel()
+		<-done
+		return
+	}
+	t.Fatal("stream event not emitted")
+}
+
 func TestEngineRunsEffectsThroughInjectedExecutor(t *testing.T) {
 	executor := &recordingExecutor{}
 	engine := NewEngineWithExecutor(executor, nil)

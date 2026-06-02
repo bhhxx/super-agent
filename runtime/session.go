@@ -35,7 +35,8 @@ type ToolApprovalCleared struct{}
 func (ToolApprovalCleared) isSessionEvent() {}
 
 type StreamChunkReceived struct {
-	Chunk StreamChunk
+	Chunk   StreamChunk
+	Message *Message
 }
 
 func (StreamChunkReceived) isSessionEvent() {}
@@ -53,11 +54,12 @@ type SessionError struct {
 func (SessionError) isSessionEvent() {}
 
 type Snapshot struct {
-	State       State
-	Messages    []Message
-	PendingTool *ToolCall
-	IsBusy      bool
-	NeedsInput  bool
+	State            State
+	Messages         []Message
+	PendingTool      *ToolCall
+	StreamingMessage *Message
+	IsBusy           bool
+	NeedsInput       bool
 }
 
 type Session struct {
@@ -99,7 +101,8 @@ func (s *Session) emitSnapshot(events chan<- SessionEvent) {
 
 func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, approvals <-chan ApprovalDecision, query string) error {
 	chunkFunc := func(chunk StreamChunk) {
-		events <- StreamChunkReceived{Chunk: chunk}
+		snapshot := s.Snapshot()
+		events <- StreamChunkReceived{Chunk: chunk, Message: snapshot.StreamingMessage}
 	}
 	if err := s.engine.dispatchEventThenRunEffects(ctx, UserMessageSubmitted{Content: query}, chunkFunc, func() {
 		s.emitSnapshot(events)

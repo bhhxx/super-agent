@@ -101,6 +101,13 @@ func (e *Engine) snapshot() Snapshot {
 		call := *e.state.PendingTool
 		snapshot.PendingTool = &call
 	}
+	if e.state.StreamingContent != "" || e.state.StreamingReasoning != "" {
+		snapshot.StreamingMessage = &Message{
+			Role:             RoleAssistant,
+			Content:          e.state.StreamingContent,
+			ReasoningContent: e.state.StreamingReasoning,
+		}
+	}
 	return snapshot
 }
 
@@ -249,10 +256,17 @@ func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChu
 }
 
 func (e *Engine) executeEffect(ctx context.Context, effect QueuedEffect, chunkFunc func(StreamChunk)) error {
+	streamFunc := chunkFunc
+	if chunkFunc != nil {
+		streamFunc = func(chunk StreamChunk) {
+			e.recordStreamChunk(effect.RunID, chunk)
+			chunkFunc(chunk)
+		}
+	}
 	outcome, err := e.runner.Run(ctx, effect, ExecutionInput{
 		Messages:  e.Messages(),
 		ToolSpecs: e.toolSpecs(),
-	}, chunkFunc)
+	}, streamFunc)
 	if err != nil {
 		return err
 	}
@@ -282,4 +296,13 @@ func (e *Engine) executeEffect(ctx context.Context, effect QueuedEffect, chunkFu
 
 func (e *Engine) toolSpecs() []ToolSpec {
 	return e.runner.ToolSpecs()
+}
+
+func (e *Engine) recordStreamChunk(runID RunID, chunk StreamChunk) {
+	if !e.runs.IsCurrent(runID) {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.reducer.Apply(&e.state, e.scheduler.Clear, AppendStreamingAssistant{Chunk: chunk})
 }
