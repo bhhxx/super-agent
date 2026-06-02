@@ -37,6 +37,12 @@ type ToolCall struct {
 	Input string
 }
 
+type ToolCallBatch struct {
+	ID    string
+	Calls []ToolCall
+	Index int
+}
+
 type ToolSpec struct {
 	Name        string
 	Description string

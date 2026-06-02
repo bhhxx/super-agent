@@ -85,7 +85,10 @@ func (e *Engine) PendingTool() (ToolCall, bool) {
 func (e *Engine) QueuedToolCalls() []ToolCall {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return append([]ToolCall(nil), e.state.QueuedToolCalls...)
+	if e.state.ToolBatch == nil || e.state.ToolBatch.Index >= len(e.state.ToolBatch.Calls) {
+		return nil
+	}
+	return append([]ToolCall(nil), e.state.ToolBatch.Calls[e.state.ToolBatch.Index:]...)
 }
 
 func (e *Engine) snapshot() Snapshot {
@@ -100,6 +103,11 @@ func (e *Engine) snapshot() Snapshot {
 	if e.state.PendingTool != nil {
 		call := *e.state.PendingTool
 		snapshot.PendingTool = &call
+		if e.state.ToolBatch != nil {
+			snapshot.PendingToolBatchID = e.state.ToolBatch.ID
+			snapshot.PendingToolBatchIndex = e.state.ToolBatch.Index
+			snapshot.PendingToolBatchTotal = len(e.state.ToolBatch.Calls)
+		}
 	}
 	if e.state.StreamingContent != "" || e.state.StreamingReasoning != "" {
 		snapshot.StreamingMessage = &Message{
@@ -275,8 +283,17 @@ func (e *Engine) executeEffect(ctx context.Context, effect QueuedEffect, chunkFu
 	}
 	toolSpecs := e.toolSpecs()
 	e.mu.Lock()
+	var batch *ToolCallBatch
+	if e.state.ToolBatch != nil {
+		copied := ToolCallBatch{
+			ID:    e.state.ToolBatch.ID,
+			Calls: append([]ToolCall(nil), e.state.ToolBatch.Calls...),
+			Index: e.state.ToolBatch.Index,
+		}
+		batch = &copied
+	}
 	event, err := e.resolver.Resolve(outcome.Result, ResultResolveInput{
-		QueuedToolCalls: append([]ToolCall(nil), e.state.QueuedToolCalls...),
+		ToolBatch: batch,
 	})
 	if err == nil {
 		event, err = e.classifier.Classify(event, EventClassifyInput{ToolSpecs: toolSpecs})

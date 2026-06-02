@@ -39,23 +39,25 @@ func (DefaultReducer) Apply(state *EngineState, clearEffects func(), mutation Mu
 	case SetPendingTool:
 		call := m.Call
 		state.PendingTool = &call
-	case SetQueuedToolCalls:
-		state.QueuedToolCalls = append([]ToolCall(nil), m.Calls...)
-	case PopQueuedToolCall:
-		if len(state.QueuedToolCalls) > 0 {
-			state.QueuedToolCalls[0] = ToolCall{}
-			state.QueuedToolCalls = state.QueuedToolCalls[1:]
+	case SetToolCallBatch:
+		state.ToolBatch = &ToolCallBatch{
+			ID:    m.ID,
+			Calls: append([]ToolCall(nil), m.Calls...),
+		}
+	case AdvanceToolCallBatch:
+		if state.ToolBatch != nil && state.ToolBatch.Index < len(state.ToolBatch.Calls) {
+			state.ToolBatch.Index++
 		}
 	case ClearPendingTool:
 		state.PendingTool = nil
-	case ClearQueuedToolCalls:
-		state.QueuedToolCalls = nil
+	case ClearToolCallBatch:
+		state.ToolBatch = nil
 	case ClearPendingEffects:
 		clearEffects()
 	case ResetContext:
 		state.Messages = nil
 		state.PendingTool = nil
-		state.QueuedToolCalls = nil
+		state.ToolBatch = nil
 		state.StreamingContent = ""
 		state.StreamingReasoning = ""
 		clearEffects()

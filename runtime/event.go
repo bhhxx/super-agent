@@ -10,8 +10,11 @@ var AllEvents = []Event{
 	UserMessageSubmitted{},
 	AssistantMessageReceived{},
 	ToolCallsReceived{},
-	ToolCallBatchFirstNeedsApproval{},
-	ToolCallBatchFirstReadyToRun{},
+	ToolBatchReceived{},
+	ToolCallAvailable{},
+	ToolCallNeedsApproval{},
+	ToolCallReadyToRun{},
+	ToolBatchFinished{},
 	ToolResultReceived{},
 	ApprovalGranted{},
 	ApprovalAlwaysGranted{},
@@ -19,10 +22,6 @@ var AllEvents = []Event{
 	ErrorOccurred{},
 	CancelRequested{},
 	ResetRequested{},
-	NoMoreToolCalls{},
-	NextToolCallAvailable{},
-	QueuedToolCallNeedsApproval{},
-	QueuedToolCallReadyToRun{},
 	EngineReady{},
 }
 
@@ -46,21 +45,35 @@ type ToolCallsReceived struct {
 
 func (ToolCallsReceived) isEvent() {}
 
-type ToolCallBatchFirstNeedsApproval struct {
+type ToolBatchReceived struct {
 	Content          string
 	Calls            []ToolCall
 	ReasoningContent string
 }
 
-func (ToolCallBatchFirstNeedsApproval) isEvent() {}
+func (ToolBatchReceived) isEvent() {}
 
-type ToolCallBatchFirstReadyToRun struct {
-	Content          string
-	Calls            []ToolCall
-	ReasoningContent string
+type ToolCallAvailable struct {
+	Call ToolCall
 }
 
-func (ToolCallBatchFirstReadyToRun) isEvent() {}
+func (ToolCallAvailable) isEvent() {}
+
+type ToolCallNeedsApproval struct {
+	Call ToolCall
+}
+
+func (ToolCallNeedsApproval) isEvent() {}
+
+type ToolCallReadyToRun struct {
+	Call ToolCall
+}
+
+func (ToolCallReadyToRun) isEvent() {}
+
+type ToolBatchFinished struct{}
+
+func (ToolBatchFinished) isEvent() {}
 
 type ToolResultReceived struct {
 	Call   ToolCall
@@ -100,28 +113,6 @@ func (CancelRequested) isEvent() {}
 type ResetRequested struct{}
 
 func (ResetRequested) isEvent() {}
-
-type NoMoreToolCalls struct{}
-
-func (NoMoreToolCalls) isEvent() {}
-
-type NextToolCallAvailable struct {
-	Call ToolCall
-}
-
-func (NextToolCallAvailable) isEvent() {}
-
-type QueuedToolCallNeedsApproval struct {
-	Call ToolCall
-}
-
-func (QueuedToolCallNeedsApproval) isEvent() {}
-
-type QueuedToolCallReadyToRun struct {
-	Call ToolCall
-}
-
-func (QueuedToolCallReadyToRun) isEvent() {}
 
 type EngineReady struct{}
 

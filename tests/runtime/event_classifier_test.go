@@ -6,7 +6,7 @@ import (
 	. "super-agent/runtime"
 )
 
-func TestDefaultEventClassifierTurnsRiskyToolIntoApprovalEvent(t *testing.T) {
+func TestDefaultEventClassifierTurnsToolCallsIntoBatchEvent(t *testing.T) {
 	store := NewMemoryApprovalStore()
 	classifier := NewDefaultEventClassifier(NewDefaultPolicy(), store)
 	event, err := classifier.Classify(ToolCallsReceived{
@@ -17,8 +17,24 @@ func TestDefaultEventClassifierTurnsRiskyToolIntoApprovalEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Classify failed: %v", err)
 	}
-	if _, ok := event.(ToolCallBatchFirstNeedsApproval); !ok {
-		t.Fatalf("event = %T, want ToolCallBatchFirstNeedsApproval", event)
+	if _, ok := event.(ToolBatchReceived); !ok {
+		t.Fatalf("event = %T, want ToolBatchReceived", event)
+	}
+}
+
+func TestDefaultEventClassifierTurnsRiskyAvailableToolIntoApprovalEvent(t *testing.T) {
+	store := NewMemoryApprovalStore()
+	classifier := NewDefaultEventClassifier(NewDefaultPolicy(), store)
+	event, err := classifier.Classify(ToolCallAvailable{
+		Call: ToolCall{ID: "call-1", Name: "bash", Input: `{"command":"rm -rf /"}`},
+	}, EventClassifyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+	if err != nil {
+		t.Fatalf("Classify failed: %v", err)
+	}
+	if _, ok := event.(ToolCallNeedsApproval); !ok {
+		t.Fatalf("event = %T, want ToolCallNeedsApproval", event)
 	}
 }
 

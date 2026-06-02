@@ -115,6 +115,8 @@ type App struct {
 	state            runtime.State
 	messages         []runtime.Message
 	pendingTool      *runtime.ToolCall
+	pendingToolIndex int
+	pendingToolTotal int
 	streamingMessage *runtime.Message
 }
 
@@ -285,7 +287,11 @@ func (a App) footerView() string {
 			Foreground(lipgloss.Color("0")).
 			Padding(0, 1).
 			Render(" ACTION REQUIRED ")
-		b.WriteString(prompt + " approve " + lipgloss.NewStyle().Bold(true).Render(call.Name) + "? [y/a/n]\n")
+		progress := ""
+		if a.pendingToolTotal > 0 {
+			progress = fmt.Sprintf(" tool %d/%d:", a.pendingToolIndex, a.pendingToolTotal)
+		}
+		b.WriteString(prompt + progress + " approve " + lipgloss.NewStyle().Bold(true).Render(call.Name) + "? [y/a/n]\n")
 	}
 
 	count := fmt.Sprintf("%d/%d", len(a.input.Value()), a.input.CharLimit)
@@ -581,12 +587,18 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state = event.State
 			if !a.needsInput() {
 				a.pendingTool = nil
+				a.pendingToolIndex = 0
+				a.pendingToolTotal = 0
 			}
 		case runtime.ToolApprovalRequested:
 			call := event.ToolCall
 			a.pendingTool = &call
+			a.pendingToolIndex = event.BatchIndex
+			a.pendingToolTotal = event.BatchTotal
 		case runtime.ToolApprovalCleared:
 			a.pendingTool = nil
+			a.pendingToolIndex = 0
+			a.pendingToolTotal = 0
 		case runtime.MessageAppended:
 			a.messages = append(a.messages, event.Message)
 			if event.Message.Role == runtime.RoleAssistant {

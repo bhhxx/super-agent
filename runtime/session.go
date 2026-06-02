@@ -25,7 +25,10 @@ type StateChanged struct {
 func (StateChanged) isSessionEvent() {}
 
 type ToolApprovalRequested struct {
-	ToolCall ToolCall
+	ToolCall   ToolCall
+	BatchID    string
+	BatchIndex int
+	BatchTotal int
 }
 
 func (ToolApprovalRequested) isSessionEvent() {}
@@ -54,12 +57,15 @@ type SessionError struct {
 func (SessionError) isSessionEvent() {}
 
 type Snapshot struct {
-	State            State
-	Messages         []Message
-	PendingTool      *ToolCall
-	StreamingMessage *Message
-	IsBusy           bool
-	NeedsInput       bool
+	State                 State
+	Messages              []Message
+	PendingTool           *ToolCall
+	PendingToolBatchID    string
+	PendingToolBatchIndex int
+	PendingToolBatchTotal int
+	StreamingMessage      *Message
+	IsBusy                bool
+	NeedsInput            bool
 }
 
 type Session struct {

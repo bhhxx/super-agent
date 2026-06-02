@@ -12,6 +12,22 @@ func toolCallKey(call ToolCall) string {
 	return call.Name + "\x00" + call.Input
 }
 
+func toolBatchID(calls []ToolCall) string {
+	if len(calls) == 0 || calls[0].ID == "" {
+		return "batch"
+	}
+	return "batch-" + calls[0].ID
+}
+
+func toolCallPointers(calls []ToolCall) []*ToolCall {
+	toolCalls := make([]*ToolCall, 0, len(calls))
+	for i := range calls {
+		call := calls[i]
+		toolCalls = append(toolCalls, &call)
+	}
+	return toolCalls
+}
+
 func runtimeErrorMessage(err error) string {
 	if err == nil {
 		return "unknown runtime error"
@@ -42,55 +58,25 @@ func Transition(state State, event Event) (TransitionResult, error) {
 				ReasoningContent: ev.Response.ReasoningContent,
 			}}},
 		}, nil
-	case ToolCallBatchFirstNeedsApproval:
+	case ToolBatchReceived:
 		if state != StateWaitingLLM {
 			return TransitionResult{}, errors.New("runtime is not waiting for llm")
 		}
 		if len(ev.Calls) == 0 {
 			return TransitionResult{}, errors.New("empty tool calls")
 		}
-		toolCalls := make([]*ToolCall, 0, len(ev.Calls))
-		for i := range ev.Calls {
-			call := ev.Calls[i]
-			toolCalls = append(toolCalls, &call)
-		}
 		return TransitionResult{
-			NextState: StateWaitingApproval,
+			NextState: StateAdvancingQueue,
 			Mutations: []Mutation{
 				AppendAssistantMessage{Message: Message{
 					Role:             RoleAssistant,
 					Content:          ev.Content,
 					ReasoningContent: ev.ReasoningContent,
-					ToolCalls:        toolCalls,
+					ToolCalls:        toolCallPointers(ev.Calls),
 				}},
-				SetQueuedToolCalls{Calls: ev.Calls[1:]},
-				SetPendingTool{Call: ev.Calls[0]},
+				SetToolCallBatch{ID: toolBatchID(ev.Calls), Calls: ev.Calls},
 			},
-		}, nil
-	case ToolCallBatchFirstReadyToRun:
-		if state != StateWaitingLLM {
-			return TransitionResult{}, errors.New("runtime is not waiting for llm")
-		}
-		if len(ev.Calls) == 0 {
-			return TransitionResult{}, errors.New("empty tool calls")
-		}
-		toolCalls := make([]*ToolCall, 0, len(ev.Calls))
-		for i := range ev.Calls {
-			call := ev.Calls[i]
-			toolCalls = append(toolCalls, &call)
-		}
-		return TransitionResult{
-			NextState: StateRunningTool,
-			Mutations: []Mutation{
-				AppendAssistantMessage{Message: Message{
-					Role:             RoleAssistant,
-					Content:          ev.Content,
-					ReasoningContent: ev.ReasoningContent,
-					ToolCalls:        toolCalls,
-				}},
-				SetQueuedToolCalls{Calls: ev.Calls[1:]},
-			},
-			Effects: []Effect{RunTool{Call: ev.Calls[0]}},
+			Effects: []Effect{ProcessNextToolCall{}},
 		}, nil
 	case ApprovalGranted:
 		if state != StateWaitingApproval {
@@ -133,15 +119,16 @@ func Transition(state State, event Event) (TransitionResult, error) {
 			},
 			Effects: []Effect{ProcessNextToolCall{}},
 		}, nil
-	case NoMoreToolCalls:
+	case ToolBatchFinished:
 		if state != StateAdvancingQueue {
 			return TransitionResult{}, errors.New("invalid state for no more tool calls")
 		}
 		return TransitionResult{
 			NextState: StateWaitingLLM,
+			Mutations: []Mutation{ClearToolCallBatch{}},
 			Effects:   []Effect{CallModel{}},
 		}, nil
-	case QueuedToolCallNeedsApproval:
+	case ToolCallNeedsApproval:
 		if state != StateAdvancingQueue {
 			return TransitionResult{}, errors.New("invalid state for next tool call")
 		}
@@ -149,16 +136,16 @@ func Transition(state State, event Event) (TransitionResult, error) {
 			NextState: StateWaitingApproval,
 			Mutations: []Mutation{
 				SetPendingTool{Call: ev.Call},
-				PopQueuedToolCall{},
+				AdvanceToolCallBatch{},
 			},
 		}, nil
-	case QueuedToolCallReadyToRun:
+	case ToolCallReadyToRun:
 		if state != StateAdvancingQueue {
 			return TransitionResult{}, errors.New("invalid state for next tool call")
 		}
 		return TransitionResult{
 			NextState: StateRunningTool,
-			Mutations: []Mutation{PopQueuedToolCall{}},
+			Mutations: []Mutation{AdvanceToolCallBatch{}},
 			Effects:   []Effect{RunTool{Call: ev.Call}},
 		}, nil
 	case ErrorOccurred:
@@ -171,7 +158,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 					Result: runtimeErrorMessage(ev.Err),
 				},
 				ClearPendingTool{},
-				ClearQueuedToolCalls{},
+				ClearToolCallBatch{},
 				ClearPendingEffects{},
 			},
 		}, nil
@@ -181,7 +168,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 			Mutations: []Mutation{
 				FlushStreamingAssistant{Interrupted: true},
 				ClearPendingTool{},
-				ClearQueuedToolCalls{},
+				ClearToolCallBatch{},
 				ClearPendingEffects{},
 			},
 		}, nil

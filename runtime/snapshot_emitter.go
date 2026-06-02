@@ -13,7 +13,12 @@ func (se *snapshotEmitter) emit(events chan<- SessionEvent, snapshot Snapshot) {
 	events <- StateChanged{State: snapshot.State}
 	if snapshot.PendingTool != nil {
 		if se.emittedApproval == nil || *se.emittedApproval != *snapshot.PendingTool {
-			events <- ToolApprovalRequested{ToolCall: *snapshot.PendingTool}
+			events <- ToolApprovalRequested{
+				ToolCall:   *snapshot.PendingTool,
+				BatchID:    snapshot.PendingToolBatchID,
+				BatchIndex: snapshot.PendingToolBatchIndex,
+				BatchTotal: snapshot.PendingToolBatchTotal,
+			}
 			call := *snapshot.PendingTool
 			se.emittedApproval = &call
 		}

@@ -28,23 +28,16 @@ func (c *DefaultEventClassifier) Classify(event Event, input EventClassifyInput)
 		if len(input.ToolSpecs) == 0 {
 			return nil, errors.New("model returned tool call while tools are disabled")
 		}
-		if c.shouldRunDirectly(ev.Calls[0], input.ToolSpecs) {
-			return ToolCallBatchFirstReadyToRun{
-				Content:          ev.Content,
-				Calls:            ev.Calls,
-				ReasoningContent: ev.ReasoningContent,
-			}, nil
-		}
-		return ToolCallBatchFirstNeedsApproval{
+		return ToolBatchReceived{
 			Content:          ev.Content,
 			Calls:            ev.Calls,
 			ReasoningContent: ev.ReasoningContent,
 		}, nil
-	case NextToolCallAvailable:
+	case ToolCallAvailable:
 		if c.shouldRunDirectly(ev.Call, input.ToolSpecs) {
-			return QueuedToolCallReadyToRun{Call: ev.Call}, nil
+			return ToolCallReadyToRun{Call: ev.Call}, nil
 		}
-		return QueuedToolCallNeedsApproval{Call: ev.Call}, nil
+		return ToolCallNeedsApproval{Call: ev.Call}, nil
 	default:
 		return event, nil
 	}

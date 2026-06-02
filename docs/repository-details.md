@@ -33,7 +33,7 @@ QueuedEffect { RunID, EffectID, Effect }
   -> Reducer.Apply -> enqueue owned effects
 ```
 
-Tool approval is a pre-transition classification step. `EventClassifier` turns raw tool events such as `ToolCallsReceived` and `NextToolCallAvailable` into classified events such as `ToolCallBatchFirstNeedsApproval`, `ToolCallBatchFirstReadyToRun`, `QueuedToolCallNeedsApproval`, or `QueuedToolCallReadyToRun`. `Transition` consumes only classified runtime events.
+Tool approval is a pre-transition classification step. `ToolCallsReceived` starts one batch, while each tool call is classified separately through `ToolCallAvailable` into `ToolCallNeedsApproval` or `ToolCallReadyToRun`. A batch is the context unit; a call is the approval and execution unit.
 
 ## Runtime Terms
 
@@ -59,17 +59,16 @@ Tool approval is a pre-transition classification step. `EventClassifier` turns r
 | Initializing | EngineReady | Idle | - | - |
 | Idle | UserMessageSubmitted | WaitingLLM | AppendUserMessage | CallModel |
 | WaitingLLM | AssistantMessageReceived | Idle | AppendAssistantMessage | - |
-| WaitingLLM | ToolCallBatchFirstNeedsApproval | WaitingApproval | AppendAssistantMessage, SetQueuedToolCalls, SetPendingTool | - |
-| WaitingLLM | ToolCallBatchFirstReadyToRun | RunningTool | AppendAssistantMessage, SetQueuedToolCalls | RunTool |
+| WaitingLLM | ToolBatchReceived | AdvancingQueue | AppendAssistantMessage, SetToolCallBatch | ProcessNextToolCall |
 | WaitingApproval | ApprovalGranted | RunningTool | ClearPendingTool | RunTool |
 | WaitingApproval | ApprovalAlwaysGranted | RunningTool | ClearPendingTool | RunTool |
 | WaitingApproval | ApprovalDenied | AdvancingQueue | ClearPendingTool, AppendToolResult | ProcessNextToolCall |
 | RunningTool | ToolResultReceived | AdvancingQueue | AppendToolResult | ProcessNextToolCall |
-| AdvancingQueue | NoMoreToolCalls | WaitingLLM | - | CallModel |
-| AdvancingQueue | QueuedToolCallNeedsApproval | WaitingApproval | SetPendingTool, PopQueuedToolCall | - |
-| AdvancingQueue | QueuedToolCallReadyToRun | RunningTool | PopQueuedToolCall | RunTool |
-| any | ErrorOccurred | Idle | ClearPendingTool, ClearQueuedToolCalls, ClearPendingEffects | - |
-| any | CancelRequested | Idle | ClearPendingTool, ClearQueuedToolCalls, ClearPendingEffects | - |
+| AdvancingQueue | ToolBatchFinished | WaitingLLM | ClearToolCallBatch | CallModel |
+| AdvancingQueue | ToolCallNeedsApproval | WaitingApproval | SetPendingTool, AdvanceToolCallBatch | - |
+| AdvancingQueue | ToolCallReadyToRun | RunningTool | AdvanceToolCallBatch | RunTool |
+| any | ErrorOccurred | Idle | ClearPendingTool, ClearToolCallBatch, ClearPendingEffects | - |
+| any | CancelRequested | Idle | ClearPendingTool, ClearToolCallBatch, ClearPendingEffects | - |
 | any | ResetRequested | Idle | ResetContext | - |
 
 ## Git And PR Notes

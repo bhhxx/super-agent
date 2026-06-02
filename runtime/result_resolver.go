@@ -7,7 +7,7 @@ type ResultResolver interface {
 }
 
 type ResultResolveInput struct {
-	QueuedToolCalls []ToolCall
+	ToolBatch *ToolCallBatch
 }
 
 type DefaultResultResolver struct{}
@@ -27,10 +27,10 @@ func (DefaultResultResolver) Resolve(result ExecutionResult, input ResultResolve
 	case ToolFinished:
 		return ToolResultReceived{Call: r.Call, Result: r.Result}, nil
 	case ToolQueueChecked:
-		if len(input.QueuedToolCalls) == 0 {
-			return NoMoreToolCalls{}, nil
+		if input.ToolBatch == nil || input.ToolBatch.Index >= len(input.ToolBatch.Calls) {
+			return ToolBatchFinished{}, nil
 		}
-		return NextToolCallAvailable{Call: input.QueuedToolCalls[0]}, nil
+		return ToolCallAvailable{Call: input.ToolBatch.Calls[input.ToolBatch.Index]}, nil
 	default:
 		return nil, fmt.Errorf("unknown effect result type: %T", r)
 	}

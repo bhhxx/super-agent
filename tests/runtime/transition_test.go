@@ -69,36 +69,35 @@ func TestTransitionTable(t *testing.T) {
 			wantErr: true,
 		},
 
-		// --- ToolCallBatchFirstNeedsApproval ---
+		// --- ToolBatchReceived ---
 		{
-			name: "ToolCallBatchFirstNeedsApproval/WaitingLLM->WaitingApproval", state: StateWaitingLLM,
-			event: ToolCallBatchFirstNeedsApproval{
+			name: "ToolBatchReceived/WaitingLLM->AdvancingQueue", state: StateWaitingLLM,
+			event: ToolBatchReceived{
 				Content: "thinking", Calls: sampleToolCalls(), ReasoningContent: "reasoning",
 			},
-			wantState:     StateWaitingApproval,
-			mutationCount: 3, // AppendAssistantMessage + SetQueuedToolCalls + SetPendingTool
-			effectCount:   0,
+			wantState:     StateAdvancingQueue,
+			mutationCount: 2, // AppendAssistantMessage + SetToolCallBatch
+			effectCount:   1,
+			effectType:    ProcessNextToolCall{},
 		},
 		{
-			name: "ToolCallBatchFirstNeedsApproval/rejects_when_not_WaitingLLM", state: StateIdle,
-			event:   ToolCallBatchFirstNeedsApproval{Calls: sampleToolCalls()},
+			name: "ToolBatchReceived/rejects_when_not_WaitingLLM", state: StateIdle,
+			event:   ToolBatchReceived{Calls: sampleToolCalls()},
 			wantErr: true,
 		},
 
-		// --- ToolCallBatchFirstReadyToRun ---
+		// --- ToolBatchFinished ---
 		{
-			name: "ToolCallBatchFirstReadyToRun/WaitingLLM->RunningTool", state: StateWaitingLLM,
-			event: ToolCallBatchFirstReadyToRun{
-				Content: "thinking", Calls: sampleToolCalls(), ReasoningContent: "reasoning",
-			},
-			wantState:     StateRunningTool,
-			mutationCount: 2, // AppendAssistantMessage + SetQueuedToolCalls
+			name: "ToolBatchFinished/AdvancingQueue->WaitingLLM", state: StateAdvancingQueue,
+			event:         ToolBatchFinished{},
+			wantState:     StateWaitingLLM,
+			mutationCount: 1,
 			effectCount:   1,
-			effectType:    RunTool{},
+			effectType:    CallModel{},
 		},
 		{
-			name: "ToolCallBatchFirstReadyToRun/rejects_when_not_WaitingLLM", state: StateIdle,
-			event:   ToolCallBatchFirstReadyToRun{Calls: sampleToolCalls()},
+			name: "ToolBatchFinished/rejects_when_not_AdvancingQueue", state: StateIdle,
+			event:   ToolBatchFinished{},
 			wantErr: true,
 		},
 
@@ -158,42 +157,30 @@ func TestTransitionTable(t *testing.T) {
 			wantErr: true,
 		},
 
-		// --- NoMoreToolCalls ---
+		// --- ToolCallNeedsApproval ---
 		{
-			name: "NoMoreToolCalls/AdvancingQueue->WaitingLLM", state: StateAdvancingQueue,
-			event:       NoMoreToolCalls{},
-			wantState:   StateWaitingLLM,
-			effectCount: 1, effectType: CallModel{},
-		},
-		{
-			name: "NoMoreToolCalls/rejects_when_not_AdvancingQueue", state: StateIdle,
-			event: NoMoreToolCalls{}, wantErr: true,
-		},
-
-		// --- QueuedToolCallNeedsApproval ---
-		{
-			name: "QueuedToolCallNeedsApproval/AdvancingQueue->WaitingApproval", state: StateAdvancingQueue,
-			event:         QueuedToolCallNeedsApproval{Call: sampleToolCall()},
+			name: "ToolCallNeedsApproval/AdvancingQueue->WaitingApproval", state: StateAdvancingQueue,
+			event:         ToolCallNeedsApproval{Call: sampleToolCall()},
 			wantState:     StateWaitingApproval,
-			mutationCount: 2, // SetPendingTool + PopQueuedToolCall
+			mutationCount: 2, // SetPendingTool + AdvanceToolCallBatch
 		},
 		{
-			name: "QueuedToolCallNeedsApproval/rejects_when_not_AdvancingQueue", state: StateIdle,
-			event:   QueuedToolCallNeedsApproval{Call: sampleToolCall()},
+			name: "ToolCallNeedsApproval/rejects_when_not_AdvancingQueue", state: StateIdle,
+			event:   ToolCallNeedsApproval{Call: sampleToolCall()},
 			wantErr: true,
 		},
 
-		// --- QueuedToolCallReadyToRun ---
+		// --- ToolCallReadyToRun ---
 		{
-			name: "QueuedToolCallReadyToRun/AdvancingQueue->RunningTool", state: StateAdvancingQueue,
-			event:         QueuedToolCallReadyToRun{Call: sampleToolCall()},
+			name: "ToolCallReadyToRun/AdvancingQueue->RunningTool", state: StateAdvancingQueue,
+			event:         ToolCallReadyToRun{Call: sampleToolCall()},
 			wantState:     StateRunningTool,
-			mutationCount: 1, mutationType: PopQueuedToolCall{},
+			mutationCount: 1, mutationType: AdvanceToolCallBatch{},
 			effectCount: 1, effectType: RunTool{},
 		},
 		{
-			name: "QueuedToolCallReadyToRun/rejects_when_not_AdvancingQueue", state: StateIdle,
-			event:   QueuedToolCallReadyToRun{Call: sampleToolCall()},
+			name: "ToolCallReadyToRun/rejects_when_not_AdvancingQueue", state: StateIdle,
+			event:   ToolCallReadyToRun{Call: sampleToolCall()},
 			wantErr: true,
 		},
 
@@ -202,7 +189,7 @@ func TestTransitionTable(t *testing.T) {
 			name: "ErrorOccurred/WaitingLLM->Idle", state: StateWaitingLLM,
 			event:         ErrorOccurred{Err: errors.New("boom")},
 			wantState:     StateIdle,
-			mutationCount: 5, // FlushStreamingAssistant + AppendToolResult + ClearPendingTool + ClearQueuedToolCalls + ClearPendingEffects
+			mutationCount: 5, // FlushStreamingAssistant + AppendToolResult + ClearPendingTool + ClearToolCallBatch + ClearPendingEffects
 		},
 		{
 			name: "ErrorOccurred/RunningTool->Idle", state: StateRunningTool,

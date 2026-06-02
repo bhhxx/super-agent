@@ -12,17 +12,13 @@ var AllMutations = []Mutation{
 	AppendStreamingAssistant{},
 	FlushStreamingAssistant{},
 	SetPendingTool{},
-	SetQueuedToolCalls{},
+	SetToolCallBatch{},
+	AdvanceToolCallBatch{},
 	ClearPendingTool{},
 	ClearPendingEffects{},
-	ClearQueuedToolCalls{},
-	PopQueuedToolCall{},
+	ClearToolCallBatch{},
 	ResetContext{},
 }
-
-type PopQueuedToolCall struct{}
-
-func (PopQueuedToolCall) isMutation() {}
 
 type AppendUserMessage struct {
 	Content string
@@ -61,11 +57,16 @@ type SetPendingTool struct {
 
 func (SetPendingTool) isMutation() {}
 
-type SetQueuedToolCalls struct {
+type SetToolCallBatch struct {
+	ID    string
 	Calls []ToolCall
 }
 
-func (SetQueuedToolCalls) isMutation() {}
+func (SetToolCallBatch) isMutation() {}
+
+type AdvanceToolCallBatch struct{}
+
+func (AdvanceToolCallBatch) isMutation() {}
 
 type ClearPendingTool struct{}
 
@@ -75,9 +76,9 @@ type ClearPendingEffects struct{}
 
 func (ClearPendingEffects) isMutation() {}
 
-type ClearQueuedToolCalls struct{}
+type ClearToolCallBatch struct{}
 
-func (ClearQueuedToolCalls) isMutation() {}
+func (ClearToolCallBatch) isMutation() {}
 
 type ResetContext struct{}
 
