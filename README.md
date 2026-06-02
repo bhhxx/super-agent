@@ -35,7 +35,6 @@ DeepSeek uses `DEEPSEEK_API_KEY` and falls back to `OPENAI_API_KEY`.
 - MCP compatibility.
 - Skill compatibility.
 - System prompt config.
-- `AGENTS.md` loading.
 - Memory.
 - Persistent sessions.
 - UI cleanup.

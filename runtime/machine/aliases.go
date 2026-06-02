@@ -16,6 +16,7 @@ const (
 type Role = model.Role
 
 const (
+	RoleSystem    = model.RoleSystem
 	RoleUser      = model.RoleUser
 	RoleAssistant = model.RoleAssistant
 	RoleTool      = model.RoleTool

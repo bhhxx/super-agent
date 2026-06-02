@@ -55,7 +55,7 @@ func (DefaultReducer) Apply(state *EngineState, clearEffects func(), mutation Mu
 	case ClearPendingEffects:
 		clearEffects()
 	case ResetContext:
-		state.Messages = nil
+		state.Messages = systemMessages(state.Messages)
 		state.PendingTool = nil
 		state.ToolBatch = nil
 		state.StreamingContent = ""
@@ -64,4 +64,14 @@ func (DefaultReducer) Apply(state *EngineState, clearEffects func(), mutation Mu
 	default:
 		panic(fmt.Sprintf("unknown mutation: %T", m))
 	}
+}
+
+func systemMessages(messages []Message) []Message {
+	var kept []Message
+	for _, message := range messages {
+		if message.Role == RoleSystem {
+			kept = append(kept, message)
+		}
+	}
+	return kept
 }

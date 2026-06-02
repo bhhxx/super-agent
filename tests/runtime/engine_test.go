@@ -1255,6 +1255,24 @@ func TestResetDropsStaleModelResultAndClearsMessages(t *testing.T) {
 	}
 }
 
+func TestResetPreservesSystemMessages(t *testing.T) {
+	engine := NewEngine(&scriptedModel{}, &fakeTool{}, []Message{
+		{Role: RoleSystem, Content: "project instructions"},
+	})
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := engine.Reset(); err != nil {
+		t.Fatalf("Reset failed: %v", err)
+	}
+
+	messages := engine.Messages()
+	if len(messages) != 1 || messages[0].Role != RoleSystem || messages[0].Content != "project instructions" {
+		t.Fatalf("messages = %+v, want only system message", messages)
+	}
+}
+
 func TestNoToolsToolCallIsProtocolError(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{
 		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},

@@ -131,6 +131,8 @@ func toOpenAIMessages(messages []runtime.Message) []openai.ChatCompletionMessage
 	params := make([]openai.ChatCompletionMessageParamUnion, 0, len(messages))
 	for _, msg := range messages {
 		switch msg.Role {
+		case runtime.RoleSystem:
+			params = append(params, openai.SystemMessage(msg.Content))
 		case runtime.RoleAssistant:
 			params = append(params, assistantMessage(msg.Content, msg.ReasoningContent, msg.ToolCalls))
 		case runtime.RoleTool:

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+
 	"super-agent/llm"
 	"super-agent/runtime"
 	"super-agent/tools"
@@ -15,7 +17,11 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 	if cfg.NoTools {
 		toolRunner = tools.NoTools{}
 	}
-	engine := runtime.NewEngine(model, toolRunner, nil)
+	initial, err := initialMessages()
+	if err != nil {
+		return nil, err
+	}
+	engine := runtime.NewEngine(model, toolRunner, initial)
 	if cfg.AutoApproveTools {
 		engine.EnableAutoApproveTools()
 	}
@@ -23,4 +29,19 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 		return nil, err
 	}
 	return runtime.NewSession(engine), nil
+}
+
+func initialMessages() ([]runtime.Message, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, err
+	}
+	instructions, err := LoadProjectInstructions(cwd)
+	if err != nil {
+		return nil, err
+	}
+	if instructions == "" {
+		return nil, nil
+	}
+	return []runtime.Message{{Role: runtime.RoleSystem, Content: instructions}}, nil
 }

@@ -3,11 +3,21 @@
 ## Essentials
 
 - Go project: agent runtime, LLM adapters, local tools, Bubble Tea TUI.
-- Keep runtime state-machine logic in `runtime/transition.go`.
-- Keep orchestration in `runtime/engine.go`.
+- Keep state-machine logic in `runtime/machine/transition.go`.
+- Keep orchestration in `runtime/engine/engine.go`.
+- Keep effect execution in `runtime/execution/`.
+- Keep session/UI boundary in `runtime/session/`.
+- Load project instructions from `AGENTS.md` in the current working directory.
+- Preserve `system` messages such as project instructions across reset.
 - Do not scatter transition rules into `tui/`, `llm/`, or `tools/`.
 - Use existing vocabulary: `State`, `Event`, `Mutation`, `Effect`, `Transition`.
 - More detail: `docs/repository-details.md`.
+
+## Documentation
+
+- At the end of each work session, proactively update `AGENTS.md`.
+- Keep `AGENTS.md` aligned with current architecture, commands, tests, and security rules.
+- Update `docs/repository-details.md` when architecture or runtime flow changes.
 
 ## Commands
 

@@ -82,6 +82,38 @@ func TestOpenAIModelSendsChatCompletion(t *testing.T) {
 	}
 }
 
+func TestOpenAIModelSendsSystemMessage(t *testing.T) {
+	var requestBody struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}\n\ndata: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	model := NewOpenAIModel(Config{BaseURL: server.URL, APIKey: "test-key", Model: "test-model"})
+	_, err := model.Next(context.Background(), []runtime.Message{
+		{Role: runtime.RoleSystem, Content: "project instructions"},
+		{Role: runtime.RoleUser, Content: "hi"},
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if len(requestBody.Messages) != 2 {
+		t.Fatalf("messages = %+v, want two", requestBody.Messages)
+	}
+	if requestBody.Messages[0].Role != "system" || requestBody.Messages[0].Content != "project instructions" {
+		t.Fatalf("system message = %+v", requestBody.Messages[0])
+	}
+}
+
 func TestOpenAIModelUsesSDKDefaultBaseURLWhenConfigBaseURLIsEmpty(t *testing.T) {
 	unsetEnv(t, "OPENAI_BASE_URL")
 	originalTransport := http.DefaultTransport

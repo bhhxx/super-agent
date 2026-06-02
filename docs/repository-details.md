@@ -6,6 +6,7 @@
 main.go
   -> app.LoadConfig
   -> app.NewSession
+       -> app.LoadProjectInstructions
        -> llm.NewModel
        -> tools.NewRegistry / tools.NoTools
        -> runtime.NewEngine
@@ -14,11 +15,20 @@ main.go
 ```
 
 - `app/`: config and session assembly.
-- `runtime/`: state, events, mutations, effects, transitions, engine, session boundary.
+- `runtime/`: public aliases and constructors for runtime packages.
+- `runtime/model/`: shared runtime types and interfaces.
+- `runtime/machine/`: state, events, mutations, effects, reducer, transitions.
+- `runtime/execution/`: effect runner, executor, scheduler, resolver, classifier, policy, approvals, run control.
+- `runtime/engine/`: orchestration, state lock, lifecycle, dispatch, stale-result dropping.
+- `runtime/session/`: channel boundary for TUI events and approvals.
 - `llm/`: DeepSeek, OpenAI, Claude adapters.
 - `tools/`: bash runner, registry, no-tool mode.
 - `tui/`: Bubble Tea event loop and approval UI.
 - `tests/`: external package tests by module.
+
+## Project Instructions
+
+`app.NewSession` reads `AGENTS.md` from the current working directory. When present, its contents become the initial `system` message passed to the runtime. OpenAI-compatible providers send it as a chat `system` message. Claude sends it through the Anthropic `system` field. `ResetContext` clears conversation state but preserves `system` messages.
 
 ## Runtime Rule
 
@@ -52,6 +62,17 @@ Tool approval is a pre-transition classification step. `ToolCallsReceived` start
 - `Engine`: scheduler, state lock, lifecycle, dispatch, effect drain, stale dropping.
 - `Session`: channel boundary for UI events and approvals.
 
+## Runtime Package Boundaries
+
+- `runtime/machine/transition.go`: pure transition table.
+- `runtime/machine/reducer.go`: applies `Mutation` values to `EngineState`.
+- `runtime/engine/engine.go`: starts runs, dispatches events, drains queued effects.
+- `runtime/execution/effect_executor.go`: calls the model or tool runner.
+- `runtime/execution/result_resolver.go`: maps execution results to raw events.
+- `runtime/execution/event_classifier.go`: converts tool availability into approval or execution events.
+- `runtime/session/session.go`: serializes turns and emits UI-facing session events.
+- `runtime/runtime.go`: re-exports runtime API surface for app/tests.
+
 ## Transition Table
 
 | State | Event | Next | Mutations | Effects |
@@ -81,3 +102,7 @@ Tool approval is a pre-transition classification step. `ToolCallsReceived` start
 ## Config
 
 `main.go` loads `.env` with `godotenv`. Supported variables include `LLM_PROVIDER`, provider API keys, provider base URLs, and model names. DeepSeek defaults to `DEEPSEEK_API_KEY` and falls back to `OPENAI_API_KEY`.
+
+## Documentation Maintenance
+
+At the end of each work session, update `AGENTS.md` when project rules, architecture, commands, tests, or security guidance changed. Update this file when detailed architecture or runtime flow changed.

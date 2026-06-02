@@ -39,10 +39,14 @@ func NewClaudeModel(cfg Config) *ClaudeModel {
 }
 
 func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tools []runtime.ToolSpec, chunkFunc func(runtime.StreamChunk)) (runtime.ModelResponse, error) {
+	system, conversation := splitSystemMessages(messages)
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(m.model),
 		MaxTokens: int64(8192),
-		Messages:  toClaudeMessages(messages),
+		Messages:  toClaudeMessages(conversation),
+	}
+	if system != "" {
+		params.System = []anthropic.TextBlockParam{{Text: system}}
 	}
 
 	if len(tools) > 0 {
@@ -115,6 +119,22 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []runtime.Message, tool
 		Content:          finalAnswer,
 		ReasoningContent: reasoningContent,
 	}, nil
+}
+
+func splitSystemMessages(messages []runtime.Message) (string, []runtime.Message) {
+	var system string
+	conversation := make([]runtime.Message, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role == runtime.RoleSystem {
+			if system != "" {
+				system += "\n\n"
+			}
+			system += msg.Content
+			continue
+		}
+		conversation = append(conversation, msg)
+	}
+	return system, conversation
 }
 
 func toClaudeMessages(messages []runtime.Message) []anthropic.MessageParam {
