@@ -18,7 +18,7 @@ func TestModelRegistryCreatesRegisteredProvider(t *testing.T) {
 	registry := NewModelRegistry()
 	registry.Register("fake", func() runtime.Model { return fakeModel{} })
 
-	model, err := registry.New("fake")
+	model, err := registry.New("fake", Config{})
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}

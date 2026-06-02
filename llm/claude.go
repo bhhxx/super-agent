@@ -3,7 +3,6 @@ package llm
 import (
 	"context"
 	"encoding/json"
-	"os"
 
 	"super-agent/runtime"
 
@@ -16,12 +15,9 @@ type ClaudeModel struct {
 	model  string
 }
 
-func NewClaude() *ClaudeModel {
-	return NewClaudeModel(Config{
-		BaseURL: os.Getenv("ANTHROPIC_BASE_URL"),
-		APIKey:  os.Getenv("ANTHROPIC_API_KEY"),
-		Model:   envDefault("ANTHROPIC_MODEL", "claude-3-7-sonnet-20250219"),
-	})
+func NewClaude(cfg Config) *ClaudeModel {
+	cfg = withDefaults(cfg, Config{Model: "claude-3-7-sonnet-20250219"})
+	return NewClaudeModel(cfg)
 }
 
 func NewClaudeModel(cfg Config) *ClaudeModel {

@@ -10,7 +10,7 @@ import (
 )
 
 func NewSession(cfg Config) (*runtime.Session, error) {
-	model, err := llm.NewModel(cfg.Provider)
+	model, err := llm.NewModel(cfg.Provider, cfg.ModelConfig)
 	if err != nil {
 		return nil, err
 	}

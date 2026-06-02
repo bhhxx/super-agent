@@ -20,10 +20,14 @@ func main() {
 
 	_ = godotenv.Load()
 
-	cfg := app.LoadConfig(app.Flags{
+	cfg, err := app.LoadConfig(app.Flags{
 		AutoApproveTools: *autoApproveToolsFlag,
 		NoTools:          *noToolsFlag,
 	}, os.LookupEnv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	session, err := app.NewSession(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -32,7 +36,7 @@ func main() {
 	cwd, _ := os.Getwd()
 	if _, err := tea.NewProgram(tui.New(session, tui.TUIInfo{
 		Provider:    cfg.Provider,
-		ModelName:   llm.ModelDisplayName(cfg.Provider),
+		ModelName:   llm.ModelDisplayName(cfg.Provider, cfg.ModelConfig),
 		AutoApprove: cfg.AutoApproveTools,
 		NoTools:     cfg.NoTools,
 		CWD:         cwd,

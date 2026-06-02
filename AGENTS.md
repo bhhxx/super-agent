@@ -38,5 +38,5 @@
 ## Security
 
 - Do not commit secrets.
-- Config comes from `.env` and environment variables.
-- Provider keys include `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, and `ANTHROPIC_API_KEY`.
+- Runtime switches come from `.env` and environment variables.
+- LLM provider config comes from `~/.superagent/settings.json`.

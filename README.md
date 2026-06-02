@@ -21,14 +21,34 @@ Go agent runtime with a state-machine core, LLM providers, local tools, and a Bu
 
 `main.go` loads `.env` with `godotenv`.
 
-Provider variables:
+`.env` supports runtime switches:
 
-- `LLM_PROVIDER`: `deepseek`, `openai`, or `claude`.
-- `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`.
-- `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`.
-- `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`.
+- `NO_TOOLS=true`: disable tools.
+- `YOLO=true`: auto-approve tools.
 
-DeepSeek uses `DEEPSEEK_API_KEY` and falls back to `OPENAI_API_KEY`.
+LLM provider config lives in `~/.superagent/settings.json`. On first run, the
+app creates this template if the file does not exist:
+
+```json
+{
+  "provider": "deepseek",
+  "providers": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com",
+      "api_key": "sk-...",
+      "model": "deepseek-reasoner"
+    },
+    "openai": {
+      "api_key": "sk-...",
+      "model": "gpt-4o"
+    },
+    "claude": {
+      "api_key": "sk-ant-...",
+      "model": "claude-3-7-sonnet-20250219"
+    }
+  }
+}
+```
 
 The built-in system prompt lives in `app/system_prompt.go` and is compiled into
 the binary.

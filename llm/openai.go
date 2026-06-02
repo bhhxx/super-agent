@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -14,12 +13,9 @@ import (
 	"super-agent/runtime"
 )
 
-func NewOpenAI() *OpenAIModel {
-	return NewOpenAIModel(Config{
-		BaseURL: os.Getenv("OPENAI_BASE_URL"),
-		APIKey:  os.Getenv("OPENAI_API_KEY"),
-		Model:   envDefault("OPENAI_MODEL", "gpt-4o"),
-	})
+func NewOpenAI(cfg Config) *OpenAIModel {
+	cfg = withDefaults(cfg, Config{Model: "gpt-4o"})
+	return NewOpenAIModel(cfg)
 }
 
 type OpenAIModel struct {
@@ -191,9 +187,15 @@ func reasoningText(rawJSON string) string {
 	}
 }
 
-func envDefault(key, defaultValue string) string {
-	if value, ok := os.LookupEnv(key); ok {
-		return value
+func withDefaults(cfg, defaults Config) Config {
+	if cfg.BaseURL == "" {
+		cfg.BaseURL = defaults.BaseURL
 	}
-	return defaultValue
+	if cfg.APIKey == "" {
+		cfg.APIKey = defaults.APIKey
+	}
+	if cfg.Model == "" {
+		cfg.Model = defaults.Model
+	}
+	return cfg
 }

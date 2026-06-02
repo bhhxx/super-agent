@@ -101,7 +101,7 @@ Tool approval is a pre-transition classification step. `ToolCallsReceived` start
 
 ## Config
 
-`main.go` loads `.env` with `godotenv`. Supported variables include `LLM_PROVIDER`, provider API keys, provider base URLs, and model names. DeepSeek defaults to `DEEPSEEK_API_KEY` and falls back to `OPENAI_API_KEY`.
+`main.go` loads `.env` with `godotenv` for runtime switches such as `NO_TOOLS` and `YOLO`. LLM provider config is read from `~/.superagent/settings.json`, including provider name, API keys, base URLs, and model names. If the settings file is missing, the app creates a template on startup.
 
 ## Documentation Maintenance
 
