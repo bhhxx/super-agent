@@ -30,6 +30,10 @@ type ToolApprovalRequested struct {
 
 func (ToolApprovalRequested) isSessionEvent() {}
 
+type ToolApprovalCleared struct{}
+
+func (ToolApprovalCleared) isSessionEvent() {}
+
 type StreamChunkReceived struct {
 	Chunk StreamChunk
 }

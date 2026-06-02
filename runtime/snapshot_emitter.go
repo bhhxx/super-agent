@@ -18,6 +18,9 @@ func (se *snapshotEmitter) emit(events chan<- SessionEvent, snapshot Snapshot) {
 			se.emittedApproval = &call
 		}
 	} else {
+		if se.emittedApproval != nil {
+			events <- ToolApprovalCleared{}
+		}
 		se.emittedApproval = nil
 	}
 	messages := snapshot.Messages

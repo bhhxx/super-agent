@@ -112,6 +112,9 @@ type App struct {
 	cancel          context.CancelFunc
 	eventsCh        chan runtime.SessionEvent
 	approvalsCh     chan runtime.ApprovalDecision
+	state           runtime.State
+	messages        []runtime.Message
+	pendingTool     *runtime.ToolCall
 	streamContent   string
 	streamReasoning string
 }
@@ -165,6 +168,7 @@ func New(session Conversation, info TUIInfo) App {
 		history:     []string{},
 		eventsCh:    make(chan runtime.SessionEvent, 100),
 		approvalsCh: make(chan runtime.ApprovalDecision, 1),
+		state:       runtime.StateIdle,
 	}
 }
 
@@ -178,18 +182,17 @@ func (a App) Init() tea.Cmd {
 
 func (a App) headerView() string {
 	var icon string
-	snapshot := a.session.Snapshot()
 	switch {
-	case snapshot.IsBusy:
+	case a.isBusy():
 		icon = a.spinner.View()
-	case snapshot.NeedsInput:
+	case a.needsInput():
 		icon = "✋"
 	default:
 		icon = "◇"
 	}
 
 	title := a.styles.Header.Render(" SUPER AGENT ")
-	status := a.styles.Status.Render(fmt.Sprintf(" %s %s", icon, friendlyState(snapshot.State)))
+	status := a.styles.Status.Render(fmt.Sprintf(" %s %s", icon, friendlyState(a.state)))
 
 	header := title + status
 	version := a.styles.Version.Width(a.width - lipgloss.Width(header)).Render("v0.1.0")
@@ -236,6 +239,14 @@ func (a App) infoBar() string {
 		a.styles.Footer.Render(approveStr)
 }
 
+func (a App) isBusy() bool {
+	return a.state == runtime.StateWaitingLLM || a.state == runtime.StateRunningTool || a.state == runtime.StateAdvancingQueue
+}
+
+func (a App) needsInput() bool {
+	return a.state == runtime.StateWaitingApproval
+}
+
 func (a App) welcomeString() string {
 	var b strings.Builder
 	b.WriteString("# Welcome to Super Agent\n\n")
@@ -269,7 +280,7 @@ func (a App) footerView() string {
 		b.WriteString(a.styles.Footer.Render(" Last: "+a.lastActivity) + "\n")
 	}
 
-	if call := a.session.Snapshot().PendingTool; call != nil {
+	if call := a.pendingTool; call != nil {
 		prompt := lipgloss.NewStyle().
 			Background(lipgloss.Color("3")).
 			Foreground(lipgloss.Color("0")).
@@ -328,10 +339,9 @@ func (a App) contentString() string {
 	}
 	wrapStyle := lipgloss.NewStyle().Width(width).Padding(0, 1)
 
-	snapshot := a.session.Snapshot()
-	messages := snapshot.Messages
+	messages := a.messages
 
-	if len(messages) == 0 && !snapshot.IsBusy {
+	if len(messages) == 0 && !a.isBusy() {
 		return a.welcomeString()
 	}
 
@@ -381,7 +391,7 @@ func (a App) contentString() string {
 		b.WriteString(wrapStyle.Render(msgBlock.String()) + "\n\n")
 	}
 
-	if snapshot.IsBusy {
+	if a.isBusy() {
 		var streamBlock strings.Builder
 		streamBlock.WriteString(a.styles.AgentLabel.Render("AGENT") + "\n")
 
@@ -429,7 +439,7 @@ func ExtractCodeBlocks(content string) []string {
 }
 
 func (a *App) copyLastCodeBlock() tea.Cmd {
-	messages := a.session.Snapshot().Messages
+	messages := a.messages
 	for i := len(messages) - 1; i >= 0; i-- {
 		blocks := ExtractCodeBlocks(messages[i].Content)
 		if len(blocks) > 0 {
@@ -451,7 +461,7 @@ func (a *App) copyLastCodeBlock() tea.Cmd {
 }
 
 func (a *App) cancelRun() {
-	if a.session.Snapshot().PendingTool != nil {
+	if a.pendingTool != nil {
 		if err := a.session.Cancel(); err != nil {
 			a.err = err.Error()
 		}
@@ -507,7 +517,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch msg.String() {
 		case "ctrl+c":
-			if a.session.Snapshot().PendingTool != nil || a.cancel != nil {
+			if a.pendingTool != nil || a.cancel != nil {
 				a.cancelRun()
 				return a, nil
 			}
@@ -521,7 +531,7 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+y":
 			return a, a.copyLastCodeBlock()
 		case "esc":
-			if a.session.Snapshot().PendingTool != nil || a.cancel != nil {
+			if a.pendingTool != nil || a.cancel != nil {
 				a.cancelRun()
 				return a, nil
 			}
@@ -556,18 +566,30 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a, cmd
 		case "enter":
 			a.status = ""
-			if a.session.Snapshot().PendingTool == nil && a.cancel == nil {
+			if a.pendingTool == nil && a.cancel == nil {
 				return a.submit()
 			}
 		}
 
-		if a.session.Snapshot().PendingTool != nil {
+		if a.pendingTool != nil {
 			a.status = ""
 			return a.handleApprovalKey(msg)
 		}
 
 	case sessionEventMsg:
 		switch event := msg.event.(type) {
+		case runtime.StateChanged:
+			a.state = event.State
+			if !a.needsInput() {
+				a.pendingTool = nil
+			}
+		case runtime.ToolApprovalRequested:
+			call := event.ToolCall
+			a.pendingTool = &call
+		case runtime.ToolApprovalCleared:
+			a.pendingTool = nil
+		case runtime.MessageAppended:
+			a.messages = append(a.messages, event.Message)
 		case runtime.SessionError:
 			if !errors.Is(event.Err, context.Canceled) {
 				a.err = event.Err.Error()
@@ -677,6 +699,11 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 			} else {
 				a.err = ""
 			}
+			a.state = runtime.StateIdle
+			a.messages = nil
+			a.pendingTool = nil
+			a.streamContent = ""
+			a.streamReasoning = ""
 			a.viewport.SetContent("")
 			a.lastActivity = "Conversation reset"
 			a.input.SetValue("")
@@ -694,6 +721,8 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 	a.lastActivity = text
 	a.streamContent = ""
 	a.streamReasoning = ""
+	a.state = runtime.StateWaitingLLM
+	a.pendingTool = nil
 	a.input.SetValue("")
 	a.eventsCh = make(chan runtime.SessionEvent, 100)
 	a.approvalsCh = make(chan runtime.ApprovalDecision, 1)

@@ -254,6 +254,39 @@ func TestWaitingApprovalKeepsRunContext(t *testing.T) {
 	}
 }
 
+func TestSessionEmitsToolApprovalClearedAfterApproval(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+		{Content: "done"},
+	}}
+	tools := &fakeTool{results: map[string]string{"bash": "ok"}, specs: []ToolSpec{{Name: "bash", Risky: true}}}
+	engine := NewEngine(model, tools, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 20)
+	approvals := make(chan ApprovalDecision, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- session.RunTurn(context.Background(), "danger", events, approvals)
+	}()
+	waitForApproval(t, events, approvals, nil)
+
+	approvals <- ApproveOnce
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	for ev := range events {
+		if _, ok := ev.(ToolApprovalCleared); ok {
+			return
+		}
+	}
+	t.Fatal("tool approval cleared event not emitted")
+}
+
 func TestFinalAssistantResponseFinishesRun(t *testing.T) {
 	model := &scriptedModel{responses: []ModelResponse{{Content: "done"}}}
 	runs := NewDefaultRunController()

@@ -115,8 +115,14 @@ func TestApprovalUsesShortcutKeys(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("cmd is nil")
 	}
-	done := runCommandAsync(t, cmd)
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
+	}
+	done := runSingleCommandAsync(batch[len(batch)-1])
 	waitForState(t, session, runtime.StateWaitingApproval)
+	model, _ = drainEventsUntil(t, model, batch[0], "ACTION REQUIRED")
 
 	model, cmd = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	if cmd != nil {
@@ -149,8 +155,14 @@ func TestEscCancelsPendingApproval(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("cmd is nil")
 	}
-	done := runCommandAsync(t, cmd)
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
+	}
+	done := runSingleCommandAsync(batch[len(batch)-1])
 	waitForState(t, session, runtime.StateWaitingApproval)
+	model, _ = drainEventsUntil(t, model, batch[0], "ACTION REQUIRED")
 
 	_, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if cmd != nil {
@@ -164,6 +176,50 @@ func TestEscCancelsPendingApproval(t *testing.T) {
 	}
 	if session.Snapshot().PendingTool != nil {
 		t.Fatal("pending tool still exists")
+	}
+}
+
+func TestTUIRendersSessionEventsWithoutSnapshotReads(t *testing.T) {
+	session := &eventOnlyConversation{}
+	var model tea.Model = tui.New(session, tui.TUIInfo{Provider: "test", ModelName: "test-model"})
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	for _, r := range "hello" {
+		model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("cmd is nil")
+	}
+
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
+	}
+	runCmd := batch[len(batch)-1]
+	if done := runCmd(); done == nil {
+		t.Fatal("done message is nil")
+	}
+
+	session.rejectSnapshots = true
+	eventCmd := batch[0]
+	for {
+		eventMsg := eventCmd()
+		if eventMsg == nil {
+			break
+		}
+		var next tea.Cmd
+		model, next = model.Update(eventMsg)
+		if next == nil {
+			break
+		}
+		eventCmd = next
+	}
+
+	view := model.View()
+	if !strings.Contains(view, "ASSISTANT") || !strings.Contains(view, "from event") {
+		t.Fatalf("view = %q, want assistant message from event", view)
 	}
 }
 
@@ -189,6 +245,34 @@ func (t *recordingTools) Specs() []runtime.ToolSpec {
 	return []runtime.ToolSpec{{Name: "bash", Risky: true}}
 }
 
+type eventOnlyConversation struct {
+	rejectSnapshots bool
+}
+
+func (c *eventOnlyConversation) Snapshot() runtime.Snapshot {
+	if c.rejectSnapshots {
+		panic("unexpected Snapshot read")
+	}
+	return runtime.Snapshot{State: runtime.StateIdle}
+}
+
+func (c *eventOnlyConversation) RunTurn(_ context.Context, query string, events chan<- runtime.SessionEvent, _ <-chan runtime.ApprovalDecision) error {
+	events <- runtime.StateChanged{State: runtime.StateWaitingLLM}
+	events <- runtime.MessageAppended{Message: runtime.Message{Role: runtime.RoleUser, Content: query}}
+	events <- runtime.MessageAppended{Message: runtime.Message{Role: runtime.RoleAssistant, Content: "from event"}}
+	events <- runtime.StateChanged{State: runtime.StateIdle}
+	close(events)
+	return nil
+}
+
+func (c *eventOnlyConversation) Cancel() error {
+	return nil
+}
+
+func (c *eventOnlyConversation) Reset() error {
+	return nil
+}
+
 func runCommandAsync(t *testing.T, cmd tea.Cmd) <-chan tea.Msg {
 	t.Helper()
 	done := make(chan tea.Msg, 1)
@@ -209,6 +293,36 @@ func runCommandAsync(t *testing.T, cmd tea.Cmd) <-chan tea.Msg {
 		done <- runCmd()
 	}()
 	return done
+}
+
+func runSingleCommandAsync(cmd tea.Cmd) <-chan tea.Msg {
+	done := make(chan tea.Msg, 1)
+	go func() {
+		done <- cmd()
+	}()
+	return done
+}
+
+func drainEventsUntil(t *testing.T, model tea.Model, eventCmd tea.Cmd, want string) (tea.Model, tea.Cmd) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		msg := eventCmd()
+		if msg == nil {
+			break
+		}
+		var next tea.Cmd
+		model, next = model.Update(msg)
+		if strings.Contains(model.View(), want) {
+			return model, next
+		}
+		if next == nil {
+			break
+		}
+		eventCmd = next
+	}
+	t.Fatalf("view = %q, want %q", model.View(), want)
+	return model, nil
 }
 
 func waitForState(t *testing.T, session *runtime.Session, state runtime.State) {
