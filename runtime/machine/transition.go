@@ -135,7 +135,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		return TransitionResult{
 			NextState: StateWaitingApproval,
 			Mutations: []Mutation{
-				SetPendingTool{Call: ev.Call},
+				SetPendingTool{Call: ev.Call, Request: ev.Request},
 				AdvanceToolCallBatch{},
 			},
 		}, nil

@@ -52,7 +52,8 @@ type FlushStreamingAssistant struct {
 func (FlushStreamingAssistant) isMutation() {}
 
 type SetPendingTool struct {
-	Call ToolCall
+	Call    ToolCall
+	Request PermissionRequest
 }
 
 func (SetPendingTool) isMutation() {}

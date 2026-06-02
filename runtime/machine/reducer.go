@@ -38,7 +38,9 @@ func (DefaultReducer) Apply(state *EngineState, clearEffects func(), mutation Mu
 		state.StreamingReasoning = ""
 	case SetPendingTool:
 		call := m.Call
+		request := m.Request
 		state.PendingTool = &call
+		state.PendingPermission = &request
 	case SetToolCallBatch:
 		state.ToolBatch = &ToolCallBatch{
 			ID:    m.ID,
@@ -50,6 +52,7 @@ func (DefaultReducer) Apply(state *EngineState, clearEffects func(), mutation Mu
 		}
 	case ClearPendingTool:
 		state.PendingTool = nil
+		state.PendingPermission = nil
 	case ClearToolCallBatch:
 		state.ToolBatch = nil
 	case ClearPendingEffects:
@@ -57,6 +60,7 @@ func (DefaultReducer) Apply(state *EngineState, clearEffects func(), mutation Mu
 	case ResetContext:
 		state.Messages = systemMessages(state.Messages)
 		state.PendingTool = nil
+		state.PendingPermission = nil
 		state.ToolBatch = nil
 		state.StreamingContent = ""
 		state.StreamingReasoning = ""

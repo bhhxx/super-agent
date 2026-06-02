@@ -19,6 +19,10 @@ func NewDefaultEventClassifier(policy Policy, approvals ApprovalStore) *DefaultE
 	return &DefaultEventClassifier{policy: policy, approvals: approvals}
 }
 
+func (c *DefaultEventClassifier) SetPolicy(policy Policy) {
+	c.policy = policy
+}
+
 func (c *DefaultEventClassifier) Classify(event Event, input EventClassifyInput) (Event, error) {
 	switch ev := event.(type) {
 	case ToolCallsReceived:
@@ -34,18 +38,23 @@ func (c *DefaultEventClassifier) Classify(event Event, input EventClassifyInput)
 			ReasoningContent: ev.ReasoningContent,
 		}, nil
 	case ToolCallAvailable:
-		if c.shouldRunDirectly(ev.Call, input.ToolSpecs) {
+		decision := c.decision(ev.Call, input.ToolSpecs)
+		if decision == DecisionDenied {
+			req := c.policy.PermissionRequest(ev.Call, ToolPolicyInput{ToolSpecs: input.ToolSpecs})
+			return nil, errors.New("tool denied by permission policy: " + req.Reason)
+		}
+		if decision == DecisionRunDirectly {
 			return ToolCallReadyToRun{Call: ev.Call}, nil
 		}
-		return ToolCallNeedsApproval{Call: ev.Call}, nil
+		return ToolCallNeedsApproval{Call: ev.Call, Request: c.policy.PermissionRequest(ev.Call, ToolPolicyInput{ToolSpecs: input.ToolSpecs})}, nil
 	default:
 		return event, nil
 	}
 }
 
-func (c *DefaultEventClassifier) shouldRunDirectly(call ToolCall, specs []ToolSpec) bool {
+func (c *DefaultEventClassifier) decision(call ToolCall, specs []ToolSpec) ToolDecision {
 	if c.approvals.AutoApproveTools() || c.approvals.IsAlwaysAllowed(NewApprovalKey(call)) {
-		return true
+		return DecisionRunDirectly
 	}
-	return c.policy.ClassifyToolCall(call, ToolPolicyInput{ToolSpecs: specs}) == DecisionRunDirectly
+	return c.policy.ClassifyToolCall(call, ToolPolicyInput{ToolSpecs: specs})
 }

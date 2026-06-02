@@ -86,12 +86,13 @@ func DefaultStyles() Styles {
 }
 
 type TUIInfo struct {
-	Provider    string
-	ModelName   string
-	AutoApprove bool
-	NoTools     bool
-	CWD         string
-	MemoryPaths []string
+	Provider       string
+	ModelName      string
+	AutoApprove    bool
+	PermissionMode string
+	NoTools        bool
+	CWD            string
+	MemoryPaths    []string
 }
 
 type App struct {
@@ -116,6 +117,7 @@ type App struct {
 	state            runtime.State
 	messages         []runtime.Message
 	pendingTool      *runtime.ToolCall
+	pendingRequest   runtime.PermissionRequest
 	pendingToolIndex int
 	pendingToolTotal int
 	streamingMessage *runtime.Message
@@ -132,6 +134,7 @@ type Conversation interface {
 	DeleteSession(runtime.SessionID) error
 	Compact(context.Context, string, int) error
 	Undo() error
+	SetPermissionMode(runtime.PermissionMode) error
 }
 
 type submitDoneMsg struct {
@@ -236,9 +239,9 @@ func (a App) infoBar() string {
 	if a.info.NoTools {
 		toolsStr = "tools:off"
 	}
-	approveStr := "approve:auto"
-	if !a.info.AutoApprove {
-		approveStr = "approve:manual"
+	approveStr := "mode:" + a.info.PermissionMode
+	if approveStr == "mode:" {
+		approveStr = "mode:ask"
 	}
 	sep := a.styles.Footer.Render(" │ ")
 	return a.styles.Footer.Render(modelStr) + sep +
@@ -268,8 +271,8 @@ func (a App) welcomeString() string {
 		approveLabel = "auto"
 	}
 	b.WriteString(fmt.Sprintf("**Model:** %s/%s  ", a.info.Provider, a.info.ModelName))
-	b.WriteString(fmt.Sprintf("**Tools:** %s  **Approval:** %s\n\n", toolsLabel, approveLabel))
-	b.WriteString("**Commands:** `/help` `/memory` `/clear` `/sessions` `/resume <id>` `/compact` `/undo` `/quit`\n")
+	b.WriteString(fmt.Sprintf("**Tools:** %s  **Approval:** %s  **Mode:** %s\n\n", toolsLabel, approveLabel, firstNonEmpty(a.info.PermissionMode, "ask")))
+	b.WriteString("**Commands:** `/help` `/memory` `/permissions` `/clear` `/sessions` `/resume <id>` `/compact` `/undo` `/quit`\n")
 	return a.renderMarkdown(b.String())
 }
 
@@ -299,6 +302,22 @@ func (a App) footerView() string {
 			progress = fmt.Sprintf(" tool %d/%d:", a.pendingToolIndex, a.pendingToolTotal)
 		}
 		b.WriteString(prompt + progress + " approve " + lipgloss.NewStyle().Bold(true).Render(call.Name) + "? [y/a/n]\n")
+		if a.pendingRequest.ToolName != "" || a.pendingRequest.Reason != "" {
+			meta := fmt.Sprintf(" class: %s cwd: %s", a.pendingRequest.CommandClass, firstNonEmpty(a.pendingRequest.CWD, a.info.CWD))
+			if len(a.pendingRequest.TouchedPaths) > 0 {
+				meta += " paths: " + strings.Join(a.pendingRequest.TouchedPaths, ",")
+			}
+			if a.pendingRequest.Reason != "" {
+				meta += " reason: " + a.pendingRequest.Reason
+			}
+			b.WriteString(a.styles.Footer.Render(meta) + "\n")
+		} else if call.Input != "" {
+			input := call.Input
+			if len(input) > 240 {
+				input = input[:240] + "..."
+			}
+			b.WriteString(a.styles.Footer.Render(" cwd: "+a.info.CWD+" input: "+input) + "\n")
+		}
 	}
 
 	count := fmt.Sprintf("%d/%d", len(a.input.Value()), a.input.CharLimit)
@@ -326,6 +345,11 @@ func (a *App) refreshSnapshot() {
 	a.state = snapshot.State
 	a.messages = append([]runtime.Message(nil), snapshot.Messages...)
 	a.pendingTool = snapshot.PendingTool
+	if snapshot.PendingPermission != nil {
+		a.pendingRequest = *snapshot.PendingPermission
+	} else {
+		a.pendingRequest = runtime.PermissionRequest{}
+	}
 	a.streamingMessage = snapshot.StreamingMessage
 	a.pendingToolIndex = snapshot.PendingToolBatchIndex + 1
 	a.pendingToolTotal = snapshot.PendingToolBatchTotal
@@ -606,16 +630,19 @@ func (a App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.state = event.State
 			if !a.needsInput() {
 				a.pendingTool = nil
+				a.pendingRequest = runtime.PermissionRequest{}
 				a.pendingToolIndex = 0
 				a.pendingToolTotal = 0
 			}
 		case runtime.ToolApprovalRequested:
 			call := event.ToolCall
 			a.pendingTool = &call
+			a.pendingRequest = event.Request
 			a.pendingToolIndex = event.BatchIndex
 			a.pendingToolTotal = event.BatchTotal
 		case runtime.ToolApprovalCleared:
 			a.pendingTool = nil
+			a.pendingRequest = runtime.PermissionRequest{}
 			a.pendingToolIndex = 0
 			a.pendingToolTotal = 0
 		case runtime.MessageAppended:
@@ -669,6 +696,7 @@ func (a App) helpView() string {
 		a.styles.CommandLabel.Render("/resume") + "   Resume saved session",
 		a.styles.CommandLabel.Render("/compact") + "  Compact context",
 		a.styles.CommandLabel.Render("/undo") + "     Restore checkpoint",
+		a.styles.CommandLabel.Render("/permissions") + " Show permission policy",
 		a.styles.CommandLabel.Render("/help") + "     Show this menu",
 		a.styles.CommandLabel.Render("/quit") + "     Exit application",
 		"",
@@ -715,6 +743,27 @@ func formatMemory(paths []string) string {
 	return strings.TrimSpace(b.String())
 }
 
+func formatPermissions(info TUIInfo) string {
+	mode := firstNonEmpty(info.PermissionMode, "ask")
+	return fmt.Sprintf("Permission mode: %s\nTools: %s\nApproval: %s\nCWD: %s", mode, onOff(!info.NoTools), onOff(info.AutoApprove), info.CWD)
+}
+
+func onOff(enabled bool) string {
+	if enabled {
+		return "on"
+	}
+	return "off"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func (a App) View() string {
 	if !a.ready {
 		return "\n  Initializing..."
@@ -757,6 +806,22 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 		case "/memory":
 			a.err = ""
 			a.status = formatMemory(a.info.MemoryPaths)
+			a.input.SetValue("")
+			return a, nil
+		case "/permissions":
+			a.err = ""
+			if len(parts) >= 3 && parts[1] == "mode" {
+				mode := runtime.PermissionMode(parts[2])
+				if err := a.session.SetPermissionMode(mode); err != nil {
+					a.err = "Permissions failed: " + err.Error()
+				} else {
+					a.info.PermissionMode = string(mode)
+					a.info.AutoApprove = mode == runtime.PermissionModeBypass
+					a.status = formatPermissions(a.info)
+				}
+			} else {
+				a.status = formatPermissions(a.info)
+			}
 			a.input.SetValue("")
 			return a, nil
 		case "/clear", "/reset":
@@ -847,6 +912,7 @@ func (a App) submit() (tea.Model, tea.Cmd) {
 	a.streamingMessage = nil
 	a.state = runtime.StateWaitingLLM
 	a.pendingTool = nil
+	a.pendingRequest = runtime.PermissionRequest{}
 	a.input.SetValue("")
 	a.eventsCh = make(chan runtime.SessionEvent, 100)
 	a.approvalsCh = make(chan runtime.ApprovalDecision, 1)

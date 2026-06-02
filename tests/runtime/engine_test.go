@@ -129,6 +129,10 @@ func (p *recordingPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput)
 	return p.decision
 }
 
+func (p *recordingPolicy) PermissionRequest(call ToolCall, _ ToolPolicyInput) PermissionRequest {
+	return PermissionRequest{ToolName: call.Name, Reason: "test policy"}
+}
+
 type blockingApprovalStore struct {
 	blockAllow chan struct{}
 	allowing   chan struct{}

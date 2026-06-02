@@ -322,6 +322,10 @@ func (c *eventOnlyConversation) Undo() error {
 	return nil
 }
 
+func (c *eventOnlyConversation) SetPermissionMode(runtime.PermissionMode) error {
+	return nil
+}
+
 func runCommandAsync(t *testing.T, cmd tea.Cmd) <-chan tea.Msg {
 	t.Helper()
 	done := make(chan tea.Msg, 1)

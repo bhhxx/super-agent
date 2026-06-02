@@ -26,7 +26,7 @@ func TestDefaultEventClassifierTurnsRiskyAvailableToolIntoApprovalEvent(t *testi
 	store := NewMemoryApprovalStore()
 	classifier := NewDefaultEventClassifier(NewDefaultPolicy(), store)
 	event, err := classifier.Classify(ToolCallAvailable{
-		Call: ToolCall{ID: "call-1", Name: "bash", Input: `{"command":"rm -rf /"}`},
+		Call: ToolCall{ID: "call-1", Name: "bash", Input: `{"command":"touch build.txt"}`},
 	}, EventClassifyInput{
 		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
 	})
@@ -58,5 +58,102 @@ func TestDefaultPolicyDoesNotReadApprovalStore(t *testing.T) {
 
 	if decision != DecisionNeedsApproval {
 		t.Fatalf("decision = %v, want needs approval", decision)
+	}
+}
+
+func TestAcceptEditsRunsReadOnlyGitWithoutApproval(t *testing.T) {
+	policy := NewPolicy(PermissionModeAcceptEdits, PermissionRules{})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"git status --short"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+
+	if decision != DecisionRunDirectly {
+		t.Fatalf("decision = %v, want run directly", decision)
+	}
+}
+
+func TestPlanModeDeniesWriteTool(t *testing.T) {
+	policy := NewPolicy(PermissionModePlan, PermissionRules{})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "write_file", Input: `{"path":"main.go","content":"x"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "write_file", Risky: true}},
+	})
+
+	if decision != DecisionDenied {
+		t.Fatalf("decision = %v, want denied", decision)
+	}
+}
+
+func TestDestructiveCommandNeedsApproval(t *testing.T) {
+	policy := NewPolicy(PermissionModeAcceptEdits, PermissionRules{})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"rm -rf build"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+
+	if decision != DecisionNeedsApproval {
+		t.Fatalf("decision = %v, want needs approval", decision)
+	}
+}
+
+func TestProtectedPathDenied(t *testing.T) {
+	policy := NewPolicy(PermissionModeBypass, PermissionRules{})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "write_file", Input: `{"path":".env","content":"secret"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "write_file", Risky: true}},
+	})
+
+	if decision != DecisionDenied {
+		t.Fatalf("decision = %v, want denied", decision)
+	}
+}
+
+func TestNetworkDeniedByDefault(t *testing.T) {
+	policy := NewPolicy(PermissionModeAcceptEdits, PermissionRules{})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"curl https://example.com"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+
+	if decision != DecisionNeedsApproval {
+		t.Fatalf("decision = %v, want needs approval", decision)
+	}
+}
+
+func TestAllowedPathRunsDirectly(t *testing.T) {
+	policy := NewPolicy(PermissionModeAsk, PermissionRules{AllowPaths: []string{"generated"}})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "write_file", Input: `{"path":"generated/out.txt","content":"x"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "write_file", Risky: true}},
+	})
+
+	if decision != DecisionRunDirectly {
+		t.Fatalf("decision = %v, want run directly", decision)
+	}
+}
+
+func TestDeniedEnvIsDenied(t *testing.T) {
+	policy := NewPolicy(PermissionModeBypass, PermissionRules{DenyEnv: []string{"AWS_PROFILE"}})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"AWS_PROFILE=prod aws s3 ls"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+
+	if decision != DecisionDenied {
+		t.Fatalf("decision = %v, want denied", decision)
+	}
+}
+
+func TestApprovalStoreStoresPermissionPolicy(t *testing.T) {
+	store := NewMemoryApprovalStore()
+	store.SetPermissionPolicy(PermissionModePlan, PermissionRules{AllowTools: []string{"read_file"}})
+
+	if store.PermissionMode() != PermissionModePlan {
+		t.Fatalf("mode = %q, want plan", store.PermissionMode())
+	}
+	rules := store.PermissionRules()
+	if len(rules.AllowTools) != 1 || rules.AllowTools[0] != "read_file" {
+		t.Fatalf("rules = %+v, want read_file allow rule", rules)
 	}
 }

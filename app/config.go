@@ -8,24 +8,50 @@ import (
 
 	"super-agent/app/instructions"
 	"super-agent/llm"
+	"super-agent/runtime"
 )
 
 type Flags struct {
 	AutoApproveTools bool
 	NoTools          bool
+	PermissionMode   string
 }
 
 type Config struct {
 	Provider           string
 	AutoApproveTools   bool
 	NoTools            bool
+	PermissionMode     runtime.PermissionMode
+	PermissionRules    runtime.PermissionRules
 	ModelConfig        llm.Config
 	InstructionSources []string
 }
 
 type Settings struct {
-	Provider  string                `json:"provider"`
-	Providers map[string]llm.Config `json:"providers"`
+	Provider    string                `json:"provider"`
+	Providers   map[string]llm.Config `json:"providers"`
+	Permissions PermissionSettings    `json:"permissions"`
+	Sandbox     SandboxSettings       `json:"sandbox"`
+}
+
+type PermissionSettings struct {
+	Mode                 string   `json:"mode"`
+	AllowTools           []string `json:"allow_tools"`
+	DenyTools            []string `json:"deny_tools"`
+	AllowCommandPrefixes []string `json:"allow_command_prefixes"`
+	DenyCommandPrefixes  []string `json:"deny_command_prefixes"`
+	AllowPaths           []string `json:"allow_paths"`
+	DenyPaths            []string `json:"deny_paths"`
+	AllowEnv             []string `json:"allow_env"`
+	DenyEnv              []string `json:"deny_env"`
+	Network              string   `json:"network"`
+}
+
+type SandboxSettings struct {
+	Backend        string `json:"backend"`
+	OpenSandboxID  string `json:"opensandbox_id"`
+	OpenSandboxCLI string `json:"opensandbox_cli"`
+	OpenSandboxCWD string `json:"opensandbox_cwd"`
 }
 
 func DefaultSettings() Settings {
@@ -66,10 +92,32 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 	if err != nil {
 		return Config{}, err
 	}
+	mode := runtime.PermissionMode(firstNonEmpty(flags.PermissionMode, settings.Permissions.Mode, "ask"))
+	if flags.AutoApproveTools || envTrue(lookup, "YOLO") {
+		mode = runtime.PermissionModeBypass
+	}
+	rules := runtime.PermissionRules{
+		AllowTools:     settings.Permissions.AllowTools,
+		DenyTools:      settings.Permissions.DenyTools,
+		AllowPrefixes:  settings.Permissions.AllowCommandPrefixes,
+		DenyPrefixes:   settings.Permissions.DenyCommandPrefixes,
+		AllowPaths:     settings.Permissions.AllowPaths,
+		DenyPaths:      settings.Permissions.DenyPaths,
+		AllowEnv:       settings.Permissions.AllowEnv,
+		DenyEnv:        settings.Permissions.DenyEnv,
+		Network:        firstNonEmpty(settings.Permissions.Network, "deny"),
+		OpenSandboxCLI: firstNonEmpty(settings.Sandbox.OpenSandboxCLI, "osb"),
+		OpenSandboxCWD: settings.Sandbox.OpenSandboxCWD,
+	}
+	if settings.Sandbox.Backend == "opensandbox" {
+		rules.OpenSandboxID = settings.Sandbox.OpenSandboxID
+	}
 	return Config{
 		Provider:           provider,
-		AutoApproveTools:   flags.AutoApproveTools || envTrue(lookup, "YOLO"),
+		AutoApproveTools:   mode == runtime.PermissionModeBypass,
 		NoTools:            flags.NoTools || envTrue(lookup, "NO_TOOLS"),
+		PermissionMode:     mode,
+		PermissionRules:    rules,
 		ModelConfig:        settings.Providers[provider],
 		InstructionSources: instructionSourcePaths(bundle),
 	}, nil
@@ -78,6 +126,15 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 func envTrue(lookup func(string) (string, bool), key string) bool {
 	value, ok := lookup(key)
 	return ok && value == "true"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func LoadSettings() (Settings, error) {

@@ -96,14 +96,31 @@ type ToolDecision = execution.ToolDecision
 const (
 	DecisionNeedsApproval = execution.DecisionNeedsApproval
 	DecisionRunDirectly   = execution.DecisionRunDirectly
+	DecisionDenied        = execution.DecisionDenied
 )
 
+type PermissionMode = execution.PermissionMode
+
+const (
+	PermissionModeAsk         = execution.PermissionModeAsk
+	PermissionModeAcceptEdits = execution.PermissionModeAcceptEdits
+	PermissionModePlan        = execution.PermissionModePlan
+	PermissionModeBypass      = execution.PermissionModeBypass
+)
+
+type CommandClass = execution.CommandClass
+type PermissionRules = execution.PermissionRules
+type PermissionRequest = execution.PermissionRequest
 type ToolPolicyInput = execution.ToolPolicyInput
 type Policy = execution.Policy
 type DefaultPolicy = execution.DefaultPolicy
 
 func NewDefaultPolicy() *DefaultPolicy {
 	return execution.NewDefaultPolicy()
+}
+
+func NewPolicy(mode PermissionMode, rules PermissionRules) *DefaultPolicy {
+	return execution.NewPolicy(mode, rules)
 }
 
 type ApprovalKey = execution.ApprovalKey

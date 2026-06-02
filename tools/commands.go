@@ -18,11 +18,19 @@ const (
 	defaultOutputBytes    = 20000
 )
 
-type RunCommandTool struct{}
+type RunCommandTool struct {
+	Config Config
+}
 type GoTestTool struct{}
 type FormatTool struct{}
 type GitStatusTool struct{}
 type GitDiffTool struct{}
+
+type OpenSandboxCommandRunner struct {
+	CLI       string
+	SandboxID string
+	Workdir   string
+}
 
 func (RunCommandTool) Spec() runtime.ToolSpec {
 	return runtime.ToolSpec{
@@ -39,7 +47,7 @@ func (RunCommandTool) Spec() runtime.ToolSpec {
 	}
 }
 
-func (RunCommandTool) Run(ctx context.Context, call runtime.ToolCall) (string, error) {
+func (t RunCommandTool) Run(ctx context.Context, call runtime.ToolCall) (string, error) {
 	var args struct {
 		Command         string `json:"command"`
 		CWD             string `json:"cwd"`
@@ -56,6 +64,16 @@ func (RunCommandTool) Run(ctx context.Context, call runtime.ToolCall) (string, e
 	cwd, err := commandCWD(args.CWD)
 	if err != nil {
 		return "", err
+	}
+	if args.CWD == "" {
+		args.CWD = "."
+	}
+	if runner := openSandboxRunner(t.Config, args.CWD); runner != nil {
+		output, err := runner.Run(ctx, args.TimeoutSeconds, args.MaxOutputBytes, args.Command)
+		if err != nil && !args.ContinueOnError {
+			return output, err
+		}
+		return output, nil
 	}
 	output, err := runShell(ctx, cwd, args.TimeoutSeconds, args.MaxOutputBytes, args.Command)
 	if err != nil && !args.ContinueOnError {
@@ -198,6 +216,33 @@ func commandCWD(cwd string) (string, error) {
 
 func runShell(ctx context.Context, cwd string, timeoutSeconds int, maxBytes int, command string) (string, error) {
 	return runExec(ctx, cwd, commandTimeout(timeoutSeconds), outputLimit(maxBytes), "bash", "-lc", command)
+}
+
+func openSandboxRunner(cfg Config, cwd string) *OpenSandboxCommandRunner {
+	if cfg.OpenSandboxID == "" {
+		return nil
+	}
+	cli := cfg.OpenSandboxCLI
+	if cli == "" {
+		cli = "osb"
+	}
+	workdir := cfg.OpenSandboxCWD
+	if workdir == "" && cwd != "" && cwd != "." {
+		workdir = cwd
+	}
+	return &OpenSandboxCommandRunner{CLI: cli, SandboxID: cfg.OpenSandboxID, Workdir: workdir}
+}
+
+func (r *OpenSandboxCommandRunner) Run(ctx context.Context, timeoutSeconds int, maxBytes int, command string) (string, error) {
+	args := []string{"command", "run", r.SandboxID, "-o", "raw"}
+	if r.Workdir != "" {
+		args = append(args, "--workdir", r.Workdir)
+	}
+	if timeoutSeconds > 0 {
+		args = append(args, "--timeout", strconv.Itoa(timeoutSeconds)+"s")
+	}
+	args = append(args, "--", "bash", "-lc", command)
+	return runExec(ctx, "", commandTimeout(timeoutSeconds), outputLimit(maxBytes), r.CLI, args...)
 }
 
 func runExec(ctx context.Context, cwd string, timeout time.Duration, maxBytes int, name string, args ...string) (string, error) {

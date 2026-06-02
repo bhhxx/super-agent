@@ -17,6 +17,17 @@ func TestLoadConfigCombinesFlagsEnvAndSettings(t *testing.T) {
 	}
 	settings := `{
 		"provider": "claude",
+		"permissions": {
+			"mode": "accept-edits",
+			"network": "allow",
+			"allow_command_prefixes": ["git status"]
+		},
+		"sandbox": {
+			"backend": "opensandbox",
+			"opensandbox_id": "sbx-1",
+			"opensandbox_cli": "osb-dev",
+			"opensandbox_cwd": "/workspace"
+		},
 		"providers": {
 			"claude": {
 				"base_url": "https://claude.test",
@@ -48,6 +59,37 @@ func TestLoadConfigCombinesFlagsEnvAndSettings(t *testing.T) {
 	}
 	if !cfg.AutoApproveTools {
 		t.Fatal("AutoApproveTools = false, want true")
+	}
+	if cfg.PermissionMode != "bypass" {
+		t.Fatalf("PermissionMode = %q, want bypass", cfg.PermissionMode)
+	}
+	if cfg.PermissionRules.OpenSandboxID != "sbx-1" || cfg.PermissionRules.OpenSandboxCLI != "osb-dev" || cfg.PermissionRules.OpenSandboxCWD != "/workspace" {
+		t.Fatalf("PermissionRules sandbox = %+v", cfg.PermissionRules)
+	}
+	if len(cfg.PermissionRules.AllowPrefixes) != 1 || cfg.PermissionRules.AllowPrefixes[0] != "git status" {
+		t.Fatalf("AllowPrefixes = %+v", cfg.PermissionRules.AllowPrefixes)
+	}
+}
+
+func TestLoadConfigUsesSettingsPermissionMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	settingsDir := filepath.Join(home, ".superagent")
+	if err := os.MkdirAll(settingsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	settings := `{"provider":"openai","permissions":{"mode":"plan"},"providers":{"openai":{"api_key":"key","model":"model"}}}`
+	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(settings), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(Flags{}, lookup(nil))
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.PermissionMode != "plan" {
+		t.Fatalf("PermissionMode = %q, want plan", cfg.PermissionMode)
 	}
 }
 

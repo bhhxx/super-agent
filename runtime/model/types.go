@@ -38,6 +38,26 @@ type ToolCall struct {
 	Input string `json:"input"`
 }
 
+type CommandClass string
+
+const (
+	CommandClassReadOnly    CommandClass = "read-only"
+	CommandClassWrite       CommandClass = "write"
+	CommandClassNetwork     CommandClass = "network"
+	CommandClassDestructive CommandClass = "destructive"
+	CommandClassUnknown     CommandClass = "unknown"
+)
+
+type PermissionRequest struct {
+	ToolName     string
+	Command      string
+	CommandClass CommandClass
+	CWD          string
+	TouchedPaths []string
+	EnvVars      []string
+	Reason       string
+}
+
 type ToolCallBatch struct {
 	ID    string     `json:"id"`
 	Calls []ToolCall `json:"calls"`

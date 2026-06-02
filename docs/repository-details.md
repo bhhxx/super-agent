@@ -9,7 +9,7 @@ main.go
        -> app/instructions.Load
        -> llm.NewModel
        -> tools.DefaultRegistry / tools.NoTools
-       -> runtime.NewEngine
+       -> runtime.NewEngineWithExecutorAndPolicy
        -> runtime/store.OpenDefault
        -> runtime.NewPersistentSession
   -> tui.New(session)
@@ -42,6 +42,8 @@ Sessions are stored under `~/.superagent/sessions/<session-id>/` as `meta.json` 
 TUI commands:
 
 - `/memory`: show loaded instruction and memory source paths.
+- `/permissions`: show current permission mode and tool approval status.
+- `/permissions mode <ask|accept-edits|plan|bypass>`: change the active session permission mode.
 - `/sessions`: list saved sessions.
 - `/resume <id>`: load a prior transcript into the current engine.
 - `/rename <id> <title>`: update session title.
@@ -51,7 +53,7 @@ TUI commands:
 
 ## Default Tools
 
-`tools.DefaultRegistry` exposes `read_file`, `list_files`, `search`, `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, `git_status`, `git_diff`, and `bash`. File-oriented tools use structured JSON inputs and reject paths outside the current working directory. `run_command` supports cwd, timeout, and output limits. `git_status` and `git_diff` are read-only. `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, and `bash` are risky tools and require approval unless auto-approval is enabled.
+`tools.DefaultRegistry` exposes `read_file`, `list_files`, `search`, `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, `git_status`, `git_diff`, and `bash`. File-oriented tools use structured JSON inputs and reject paths outside the current working directory. `run_command` supports cwd, timeout, and output limits. `git_status` and `git_diff` are read-only. `apply_patch`, `write_file`, `run_command`, `go_test`, `format`, and `bash` are risky tools and require policy approval unless the active mode allows them. When configured with an OpenSandbox id, `run_command` and `bash` execute through `osb command run <sandbox-id> -o raw -- bash -lc <command>`.
 
 ## Runtime Rule
 
@@ -66,7 +68,7 @@ QueuedEffect { RunID, EffectID, Effect }
   -> Reducer.Apply -> enqueue owned effects
 ```
 
-Tool approval is a pre-transition classification step. `ToolCallsReceived` starts one batch, while each tool call is classified separately through `ToolCallAvailable` into `ToolCallNeedsApproval` or `ToolCallReadyToRun`. A batch is the context unit; a call is the approval and execution unit.
+Tool approval is a pre-transition classification step. `ToolCallsReceived` starts one batch, while each tool call is classified separately through `ToolCallAvailable` into `ToolCallNeedsApproval`, `ToolCallReadyToRun`, or a policy denial error. A batch is the context unit; a call is the approval and execution unit. `runtime/execution` owns command classification, protected path checks, network default-deny behavior, and structured permission requests.
 
 ## Runtime Terms
 
@@ -78,7 +80,7 @@ Tool approval is a pre-transition classification step. `ToolCallsReceived` start
 - `Reducer`: applies mutations to `EngineState`.
 - `ResultResolver`: turns `ExecutionResult` into raw runtime events.
 - `EventClassifier`: turns raw tool events into approval or ready events.
-- `Policy`: approval decision only.
+- `Policy`: permission mode, allow/deny rules, command classification, and approval decision.
 - `ApprovalStore`: stores always-allow and auto-approve state.
 - `RunController`: owns run id, cancel function, and stale-result checks.
 - `EffectRunner`: executes effects and returns owned outcomes.
@@ -125,7 +127,32 @@ Tool approval is a pre-transition classification step. `ToolCallsReceived` start
 
 ## Config
 
-`main.go` loads `.env` with `godotenv` for runtime switches such as `NO_TOOLS` and `YOLO`. LLM provider config is read from `~/.superagent/settings.json`, including provider name, API keys, base URLs, and model names. If the settings file is missing, the app creates a template on startup.
+`main.go` loads `.env` with `godotenv` for runtime switches such as `NO_TOOLS` and `YOLO`. LLM provider config is read from `~/.superagent/settings.json`, including provider name, API keys, base URLs, and model names. Permission config also lives there:
+
+```json
+{
+  "permissions": {
+    "mode": "ask",
+    "network": "deny",
+    "allow_tools": [],
+    "deny_tools": [],
+    "allow_command_prefixes": [],
+    "deny_command_prefixes": [],
+    "allow_paths": [],
+    "deny_paths": [],
+    "allow_env": [],
+    "deny_env": []
+  },
+  "sandbox": {
+    "backend": "opensandbox",
+    "opensandbox_id": "sandbox-id",
+    "opensandbox_cli": "osb",
+    "opensandbox_cwd": "/workspace"
+  }
+}
+```
+
+Supported modes are `ask`, `accept-edits`, `plan`, and `bypass`; `--yolo` maps to `bypass`. If the settings file is missing, the app creates a template on startup.
 
 ## Build
 

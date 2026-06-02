@@ -19,16 +19,31 @@ type Engine struct {
 	scheduler  *EffectScheduler
 }
 
+type policySetter interface {
+	SetPolicy(Policy)
+}
+
+type policyStore interface {
+	SetPermissionPolicy(PermissionMode, PermissionRules)
+}
+
+type policySnapshot interface {
+	Mode() PermissionMode
+	Rules() PermissionRules
+}
+
 func NewEngine(model Model, tools ToolRunner, initial []Message) *Engine {
 	return NewEngineWithExecutor(NewDefaultEffectExecutor(model, tools), initial)
 }
 
 func NewEngineWithExecutor(executor EffectExecutor, initial []Message) *Engine {
 	approvals := NewMemoryApprovalStore()
+	policy := NewDefaultPolicy()
+	approvals.SetPermissionPolicy(policy.Mode(), policy.Rules())
 	return NewEngineWithComponents(
 		NewDefaultEffectRunner(executor),
 		DefaultResultResolver{},
-		NewDefaultEventClassifier(NewDefaultPolicy(), approvals),
+		NewDefaultEventClassifier(policy, approvals),
 		DefaultReducer{},
 		NewDefaultRunController(),
 		approvals,
@@ -38,6 +53,9 @@ func NewEngineWithExecutor(executor EffectExecutor, initial []Message) *Engine {
 
 func NewEngineWithExecutorAndPolicy(executor EffectExecutor, policy Policy, initial []Message) *Engine {
 	approvals := NewMemoryApprovalStore()
+	if snapshot, ok := policy.(policySnapshot); ok {
+		approvals.SetPermissionPolicy(snapshot.Mode(), snapshot.Rules())
+	}
 	return NewEngineWithComponents(NewDefaultEffectRunner(executor), DefaultResultResolver{}, NewDefaultEventClassifier(policy, approvals), DefaultReducer{}, NewDefaultRunController(), approvals, initial)
 }
 
@@ -104,6 +122,10 @@ func (e *Engine) Snapshot() Snapshot {
 	if e.state.PendingTool != nil {
 		call := *e.state.PendingTool
 		snapshot.PendingTool = &call
+		if e.state.PendingPermission != nil {
+			request := *e.state.PendingPermission
+			snapshot.PendingPermission = &request
+		}
 		if e.state.ToolBatch != nil {
 			snapshot.PendingToolBatchID = e.state.ToolBatch.ID
 			snapshot.PendingToolBatchIndex = e.state.ToolBatch.Index
@@ -204,11 +226,26 @@ func (e *Engine) ReplaceMessages(messages []Message) {
 	defer e.mu.Unlock()
 	e.state.Messages = append([]Message(nil), messages...)
 	e.state.PendingTool = nil
+	e.state.PendingPermission = nil
 	e.state.ToolBatch = nil
 	e.state.StreamingContent = ""
 	e.state.StreamingReasoning = ""
 	e.state.State = StateIdle
 	e.scheduler.Clear()
+}
+
+func (e *Engine) SetPermissionPolicy(mode PermissionMode, rules PermissionRules) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	setter, ok := e.classifier.(policySetter)
+	if !ok {
+		return errors.New("event classifier does not support policy updates")
+	}
+	setter.SetPolicy(NewPolicy(mode, rules))
+	if store, ok := e.approvals.(policyStore); ok {
+		store.SetPermissionPolicy(mode, rules)
+	}
+	return nil
 }
 
 func (e *Engine) CompactSummary(ctx context.Context) (string, error) {

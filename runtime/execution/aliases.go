@@ -8,6 +8,17 @@ import (
 type Message = model.Message
 type ToolCall = model.ToolCall
 type ToolCallBatch = model.ToolCallBatch
+type CommandClass = model.CommandClass
+type PermissionRequest = model.PermissionRequest
+
+const (
+	CommandClassReadOnly    = model.CommandClassReadOnly
+	CommandClassWrite       = model.CommandClassWrite
+	CommandClassNetwork     = model.CommandClassNetwork
+	CommandClassDestructive = model.CommandClassDestructive
+	CommandClassUnknown     = model.CommandClassUnknown
+)
+
 type ToolSpec = model.ToolSpec
 type ModelResponse = model.ModelResponse
 type StreamChunk = model.StreamChunk

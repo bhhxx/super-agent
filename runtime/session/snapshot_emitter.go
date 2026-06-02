@@ -15,6 +15,7 @@ func (se *snapshotEmitter) emit(events chan<- SessionEvent, snapshot Snapshot, o
 		if se.emittedApproval == nil || *se.emittedApproval != *snapshot.PendingTool {
 			events <- ToolApprovalRequested{
 				ToolCall:   *snapshot.PendingTool,
+				Request:    permissionRequest(snapshot),
 				BatchID:    snapshot.PendingToolBatchID,
 				BatchIndex: snapshot.PendingToolBatchIndex,
 				BatchTotal: snapshot.PendingToolBatchTotal,
@@ -39,4 +40,11 @@ func (se *snapshotEmitter) emit(events chan<- SessionEvent, snapshot Snapshot, o
 		}
 	}
 	se.emittedMessages = len(messages)
+}
+
+func permissionRequest(snapshot Snapshot) PermissionRequest {
+	if snapshot.PendingPermission == nil {
+		return PermissionRequest{}
+	}
+	return *snapshot.PendingPermission
 }

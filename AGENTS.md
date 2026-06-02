@@ -27,7 +27,8 @@
 - `go run .`: run TUI.
 - `go run . --no-tools`: run without tools.
 - `go run . --yolo`: auto-approve tools.
-- TUI session commands: `/memory`, `/sessions`, `/resume <id>`, `/rename <id> <title>`, `/delete-session <id>`, `/compact`, `/undo`.
+- `go run . --approval-mode <ask|accept-edits|plan|bypass>`: set permission mode.
+- TUI session commands: `/memory`, `/permissions`, `/permissions mode <mode>`, `/sessions`, `/resume <id>`, `/rename <id> <title>`, `/delete-session <id>`, `/compact`, `/undo`.
 - `go test ./...`: run all tests.
 - `gofmt -w <files>`: format changed Go files.
 - `./scripts/build-local.sh`: install `/usr/local/bin/super-agent`.
@@ -47,3 +48,5 @@
 - Do not commit secrets.
 - Runtime switches come from `.env` and environment variables.
 - LLM provider config comes from `~/.superagent/settings.json`.
+- Permission mode and allow/deny rules come from `~/.superagent/settings.json`.
+- Command sandboxing can route through OpenSandbox when `sandbox.backend` is `opensandbox` and `sandbox.opensandbox_id` is set.

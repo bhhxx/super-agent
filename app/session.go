@@ -21,6 +21,11 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 		return nil, err
 	}
 	registry := tools.DefaultRegistry()
+	registry.Configure(tools.Config{
+		OpenSandboxID:  cfg.PermissionRules.OpenSandboxID,
+		OpenSandboxCLI: cfg.PermissionRules.OpenSandboxCLI,
+		OpenSandboxCWD: cfg.PermissionRules.OpenSandboxCWD,
+	})
 	toolRunner := runtime.ToolRunner(registry)
 	if cfg.NoTools {
 		toolRunner = tools.NoTools{}
@@ -29,7 +34,7 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	engine := runtime.NewEngine(model, toolRunner, initial)
+	engine := runtime.NewEngineWithExecutorAndPolicy(runtime.NewDefaultEffectExecutor(model, toolRunner), runtime.NewPolicy(cfg.PermissionMode, cfg.PermissionRules), initial)
 	if cfg.AutoApproveTools {
 		engine.EnableAutoApproveTools()
 	}
@@ -60,7 +65,9 @@ func NewSession(cfg Config) (*runtime.Session, error) {
 			_ = appendCheckpoint(st, meta.ID, call)
 		})
 	}
-	return runtime.NewPersistentSession(engine, st, meta), nil
+	session := runtime.NewPersistentSession(engine, st, meta)
+	session.ConfigurePermissions(cfg.PermissionMode, cfg.PermissionRules)
+	return session, nil
 }
 
 func initialMessages() ([]runtime.Message, instructions.Bundle, error) {

@@ -23,6 +23,8 @@ type MemoryApprovalStore struct {
 	mu               sync.Mutex
 	always           map[ApprovalKey]bool
 	autoApproveTools bool
+	mode             PermissionMode
+	rules            PermissionRules
 }
 
 func NewMemoryApprovalStore() *MemoryApprovalStore {
@@ -54,6 +56,25 @@ func (s *MemoryApprovalStore) AutoApproveTools() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.autoApproveTools
+}
+
+func (s *MemoryApprovalStore) SetPermissionPolicy(mode PermissionMode, rules PermissionRules) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mode = mode
+	s.rules = rules
+}
+
+func (s *MemoryApprovalStore) PermissionMode() PermissionMode {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.mode
+}
+
+func (s *MemoryApprovalStore) PermissionRules() PermissionRules {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rules
 }
 
 func NewApprovalKey(call ToolCall) ApprovalKey {

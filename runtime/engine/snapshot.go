@@ -4,6 +4,7 @@ type Snapshot struct {
 	State                 State
 	Messages              []Message
 	PendingTool           *ToolCall
+	PendingPermission     *PermissionRequest
 	PendingToolBatchID    string
 	PendingToolBatchIndex int
 	PendingToolBatchTotal int

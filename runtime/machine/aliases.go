@@ -25,5 +25,6 @@ const (
 type Message = model.Message
 type ToolCall = model.ToolCall
 type ToolCallBatch = model.ToolCallBatch
+type PermissionRequest = model.PermissionRequest
 type ModelResponse = model.ModelResponse
 type StreamChunk = model.StreamChunk

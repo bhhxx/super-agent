@@ -60,7 +60,8 @@ type ToolCallAvailable struct {
 func (ToolCallAvailable) isEvent() {}
 
 type ToolCallNeedsApproval struct {
-	Call ToolCall
+	Call    ToolCall
+	Request PermissionRequest
 }
 
 func (ToolCallNeedsApproval) isEvent() {}

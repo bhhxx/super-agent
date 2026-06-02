@@ -32,6 +32,7 @@ func (StateChanged) isSessionEvent() {}
 
 type ToolApprovalRequested struct {
 	ToolCall   ToolCall
+	Request    PermissionRequest
 	BatchID    string
 	BatchIndex int
 	BatchTotal int
@@ -63,11 +64,13 @@ type SessionError struct {
 func (SessionError) isSessionEvent() {}
 
 type Session struct {
-	engine  *Engine
-	emitter *snapshotEmitter
-	store   *store.Store
-	meta    store.Metadata
-	mu      sync.Mutex
+	engine          *Engine
+	emitter         *snapshotEmitter
+	store           *store.Store
+	meta            store.Metadata
+	permissionMode  PermissionMode
+	permissionRules PermissionRules
+	mu              sync.Mutex
 }
 
 func NewSession(engine *Engine) *Session {
@@ -82,6 +85,22 @@ func NewPersistentSession(engine *Engine, st *store.Store, meta store.Metadata) 
 
 func (s *Session) Metadata() store.Metadata {
 	return s.meta
+}
+
+func (s *Session) ConfigurePermissions(mode PermissionMode, rules PermissionRules) {
+	s.permissionMode = mode
+	s.permissionRules = rules
+}
+
+func (s *Session) SetPermissionMode(mode PermissionMode) error {
+	if mode == "" {
+		mode = PermissionModeAsk
+	}
+	if err := s.engine.SetPermissionPolicy(mode, s.permissionRules); err != nil {
+		return err
+	}
+	s.permissionMode = mode
+	return nil
 }
 
 func (s *Session) RunTurn(ctx context.Context, query string, events chan<- SessionEvent, approvals <-chan ApprovalDecision) error {
