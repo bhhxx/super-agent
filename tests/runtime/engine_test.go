@@ -3,6 +3,7 @@ package runtime_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -1255,9 +1256,13 @@ func TestResetDropsStaleModelResultAndClearsMessages(t *testing.T) {
 	}
 }
 
-func TestResetPreservesSystemMessages(t *testing.T) {
+func TestResetPreservesSystemMessagesAndDropsConversationMessages(t *testing.T) {
 	engine := NewEngine(&scriptedModel{}, &fakeTool{}, []Message{
 		{Role: RoleSystem, Content: "project instructions"},
+		{Role: RoleUser, Content: "old user"},
+		{Role: RoleAssistant, Content: "old assistant"},
+		{Role: RoleTool, Content: "old tool", ToolCallID: "call-1", ToolName: "bash"},
+		{Role: RoleSystem, Content: "security rules"},
 	})
 	if err := engine.Ready(); err != nil {
 		t.Fatal(err)
@@ -1268,8 +1273,12 @@ func TestResetPreservesSystemMessages(t *testing.T) {
 	}
 
 	messages := engine.Messages()
-	if len(messages) != 1 || messages[0].Role != RoleSystem || messages[0].Content != "project instructions" {
-		t.Fatalf("messages = %+v, want only system message", messages)
+	want := []Message{
+		{Role: RoleSystem, Content: "project instructions"},
+		{Role: RoleSystem, Content: "security rules"},
+	}
+	if !reflect.DeepEqual(messages, want) {
+		t.Fatalf("messages = %+v, want only system messages %+v", messages, want)
 	}
 }
 

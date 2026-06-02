@@ -35,6 +35,8 @@
 - Use external test packages such as `runtime_test` or `tui_test`.
 - Name tests by behavior, for example `TestToolCallFeedsResultBackToModel`.
 - Runtime changes should cover transitions and observable engine behavior when practical.
+- Transition tests should assert complete mutation/effect order.
+- Reset tests should prove system messages are preserved.
 
 ## Security
 
