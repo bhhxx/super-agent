@@ -26,6 +26,7 @@
 - `go run . --yolo`: auto-approve tools.
 - `go test ./...`: run all tests.
 - `gofmt -w <files>`: format changed Go files.
+- `./scripts/build-local.sh`: install `/usr/local/bin/super-agent`.
 
 ## Tests
 

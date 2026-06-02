@@ -17,6 +17,13 @@ Go agent runtime with a state-machine core, LLM providers, local tools, and a Bu
 - `go test ./...`: run all tests.
 - `gofmt -w <files>`: format changed Go files.
 
+## Build
+
+- `./scripts/build-local.sh`: install `/usr/local/bin/super-agent`.
+
+The binary is self-contained and can be run from any working directory. If your
+user cannot write `/usr/local/bin`, run the script with `sudo`.
+
 ## Configuration
 
 `main.go` loads `.env` with `godotenv`.

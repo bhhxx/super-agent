@@ -103,6 +103,10 @@ Tool approval is a pre-transition classification step. `ToolCallsReceived` start
 
 `main.go` loads `.env` with `godotenv` for runtime switches such as `NO_TOOLS` and `YOLO`. LLM provider config is read from `~/.superagent/settings.json`, including provider name, API keys, base URLs, and model names. If the settings file is missing, the app creates a template on startup.
 
+## Build
+
+`./scripts/build-local.sh` builds the app and installs it as `/usr/local/bin/super-agent`. Set `SUPER_AGENT_INSTALL_DIR` to override the install directory for tests or automation.
+
 ## Documentation Maintenance
 
 At the end of each work session, update `AGENTS.md` when project rules, architecture, commands, tests, or security guidance changed. Update this file when detailed architecture or runtime flow changed.
