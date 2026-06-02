@@ -30,11 +30,16 @@ Provider variables:
 
 DeepSeek uses `DEEPSEEK_API_KEY` and falls back to `OPENAI_API_KEY`.
 
+The built-in system prompt lives in `app/system_prompt.go` and is compiled into
+the binary.
+
+If `AGENTS.md` exists in the working directory, its content is also injected as
+system instructions.
+
 ## Roadmap
 
 - MCP compatibility.
 - Skill compatibility.
-- System prompt config.
 - Memory.
 - Persistent sessions.
 - UI cleanup.

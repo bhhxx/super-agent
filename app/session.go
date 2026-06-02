@@ -2,6 +2,7 @@ package app
 
 import (
 	"os"
+	"strings"
 
 	"super-agent/llm"
 	"super-agent/runtime"
@@ -40,8 +41,15 @@ func initialMessages() ([]runtime.Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	if instructions == "" {
+	content := strings.TrimSpace(SystemPrompt)
+	if instructions != "" {
+		if content != "" {
+			content += "\n\n"
+		}
+		content += strings.TrimSpace(instructions)
+	}
+	if content == "" {
 		return nil, nil
 	}
-	return []runtime.Message{{Role: runtime.RoleSystem, Content: instructions}}, nil
+	return []runtime.Message{{Role: runtime.RoleSystem, Content: content}}, nil
 }
