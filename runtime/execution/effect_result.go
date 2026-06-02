@@ -1,4 +1,4 @@
-package runtime
+package execution
 
 type ExecutionResult interface {
 	isExecutionResult()

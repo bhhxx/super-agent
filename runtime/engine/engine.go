@@ -1,4 +1,4 @@
-package runtime
+package engine
 
 import (
 	"context"
@@ -91,7 +91,7 @@ func (e *Engine) QueuedToolCalls() []ToolCall {
 	return append([]ToolCall(nil), e.state.ToolBatch.Calls[e.state.ToolBatch.Index:]...)
 }
 
-func (e *Engine) snapshot() Snapshot {
+func (e *Engine) Snapshot() Snapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	snapshot := Snapshot{
@@ -196,7 +196,7 @@ func (e *Engine) Reset() error {
 	return e.dispatch(ResetRequested{})
 }
 
-func (e *Engine) dispatchEventThenRunEffects(ctx context.Context, event Event, chunkFunc func(StreamChunk), afterDispatch func()) error {
+func (e *Engine) DispatchEventThenRunEffects(ctx context.Context, event Event, chunkFunc func(StreamChunk), afterDispatch func()) error {
 	e.mu.Lock()
 	decision, err := Transition(e.state.State, event)
 	if err != nil {

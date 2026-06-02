@@ -1,4 +1,4 @@
-package runtime
+package session
 
 type snapshotEmitter struct {
 	emittedMessages int

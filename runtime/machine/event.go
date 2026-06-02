@@ -1,4 +1,4 @@
-package runtime
+package machine
 
 // this file lists all event, which must have isEvent() method
 type Event interface {

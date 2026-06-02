@@ -1,4 +1,4 @@
-package runtime
+package session
 
 import (
 	"context"
@@ -56,18 +56,6 @@ type SessionError struct {
 
 func (SessionError) isSessionEvent() {}
 
-type Snapshot struct {
-	State                 State
-	Messages              []Message
-	PendingTool           *ToolCall
-	PendingToolBatchID    string
-	PendingToolBatchIndex int
-	PendingToolBatchTotal int
-	StreamingMessage      *Message
-	IsBusy                bool
-	NeedsInput            bool
-}
-
 type Session struct {
 	engine  *Engine
 	emitter *snapshotEmitter
@@ -98,7 +86,7 @@ func (s *Session) Reset() error {
 }
 
 func (s *Session) Snapshot() Snapshot {
-	return s.engine.snapshot()
+	return s.engine.Snapshot()
 }
 
 func (s *Session) emitSnapshot(events chan<- SessionEvent) {
@@ -110,7 +98,7 @@ func (s *Session) drainRun(ctx context.Context, events chan<- SessionEvent, appr
 		snapshot := s.Snapshot()
 		events <- StreamChunkReceived{Chunk: chunk, Message: snapshot.StreamingMessage}
 	}
-	if err := s.engine.dispatchEventThenRunEffects(ctx, UserMessageSubmitted{Content: query}, chunkFunc, func() {
+	if err := s.engine.DispatchEventThenRunEffects(ctx, UserMessageSubmitted{Content: query}, chunkFunc, func() {
 		s.emitSnapshot(events)
 	}); err != nil {
 		events <- SessionError{Err: err}

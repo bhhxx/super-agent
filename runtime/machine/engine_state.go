@@ -1,4 +1,4 @@
-package runtime
+package machine
 
 type EngineState struct {
 	State              State
