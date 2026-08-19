@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"super-agent/runtime"
+	runtime "super-agent/runtime/protocol"
 )
 
 type NoTools struct{}

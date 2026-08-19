@@ -1,17 +1,6 @@
-package model
+package protocol
 
 import "context"
-
-type State string
-
-const (
-	StateInitializing    State = "Initializing"
-	StateIdle            State = "Idle"
-	StateWaitingLLM      State = "WaitingLLM"
-	StateWaitingApproval State = "WaitingApproval"
-	StateRunningTool     State = "RunningTool"
-	StateAdvancingQueue  State = "AdvancingQueue"
-)
 
 type Role string
 
@@ -38,32 +27,6 @@ type ToolCall struct {
 	Input string `json:"input"`
 }
 
-type CommandClass string
-
-const (
-	CommandClassReadOnly    CommandClass = "read-only"
-	CommandClassWrite       CommandClass = "write"
-	CommandClassNetwork     CommandClass = "network"
-	CommandClassDestructive CommandClass = "destructive"
-	CommandClassUnknown     CommandClass = "unknown"
-)
-
-type PermissionRequest struct {
-	ToolName     string
-	Command      string
-	CommandClass CommandClass
-	CWD          string
-	TouchedPaths []string
-	EnvVars      []string
-	Reason       string
-}
-
-type ToolCallBatch struct {
-	ID    string     `json:"id"`
-	Calls []ToolCall `json:"calls"`
-	Index int        `json:"index"`
-}
-
 type ToolSpec struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
@@ -83,10 +46,10 @@ type StreamChunk struct {
 }
 
 type Model interface {
-	Next(ctx context.Context, messages []Message, tools []ToolSpec, chunkFunc func(StreamChunk)) (ModelResponse, error)
+	Next(context.Context, []Message, []ToolSpec, func(StreamChunk)) (ModelResponse, error)
 }
 
 type ToolRunner interface {
 	Specs() []ToolSpec
-	Run(ctx context.Context, call ToolCall) (string, error)
+	Run(context.Context, ToolCall) (string, error)
 }

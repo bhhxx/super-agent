@@ -25,23 +25,22 @@ Sources:
 
 Implemented:
 
-- Bubble Tea TUI with streaming assistant output, markdown rendering, command history, `/clear`, `/help`, `/quit`, cancel, and copy-last-code-block.
+- Bubble Tea TUI with compact small-terminal layout, a growing multiline composer, slash-command palette, streaming assistant output, markdown rendering, draft-preserving command history, steering, visible follow-up queueing during active turns, `/clear`, `/help`, `/quit`, `/instructions`, `/permissions`, `/sessions`, `/resume`, `/rename`, `/delete-session`, `/compact`, `/undo`, cancel, and copy-last-code-block.
 - LLM adapters for DeepSeek, OpenAI-compatible chat completion, and Claude.
-- Tool calls with file read/list/search, patch/write, shell command, Go test, gofmt, git status, and git diff.
-- Tool batch execution, one-call approval, always-allow approval, deny, yolo auto-approval, and no-tools mode.
+- Tool calls with file read/list/search, patch/write, shell command, `bash`, Go test, gofmt, git status, and git diff.
+- Tool batch execution, selectable keyboard approval menu, one-call approval, always-allow approval, deny, yolo auto-approval, and no-tools mode.
+- Permission modes (`ask`, `accept-edits`, `plan`, `bypass`), config file rules for tools/commands/paths/env/network, protected paths, deny-by-default network classification, and command classification (read-only/write/network/destructive).
 - State-machine runtime with `State`, `Event`, `Mutation`, `Effect`, and `Transition`.
-- JSONL session persistence, session listing/resume/rename/delete, checkpoints, undo, and context compaction.
-- Project instructions from current-directory `AGENTS.md`.
+- JSONL session persistence with serialized access, session listing/resume/rename/delete, file checkpoints with transcript-truncating undo, and context compaction that does not duplicate transcripts on replay.
+- Layered project instructions: user-level spec plus root-to-leaf `AGENTS.md` with `CLAUDE.md` fallback.
 - Reset preserving `system` messages.
-- Tests under `tests/` for config, instructions, LLM adapters, tools, TUI helpers, transitions, engine behavior, scheduler, resolver, classifier, and build script.
+- Tests under `tests/` for config, instructions, LLM adapters, tools, TUI helpers, transitions, engine behavior, scheduler, resolver, permission policy, command classification, and build script.
 
 Not implemented:
 
-- Branching, transcript fork, or memory.
+- Branching, transcript fork, or persistent conversation memory.
 - MCP, plugins, custom tools, custom commands, hooks, skills, or subagents.
 - CLI automation, headless mode, local server/API, IDE integration, GitHub/GitLab integration, or CI agent mode.
-- Configurable permission policy beyond `Risky` tool approval and yolo.
-- Sandboxed command execution, network policy, protected path policy, or command classification.
 - LSP/code intelligence, diagnostics, code actions, or symbol navigation.
 - Review mode, PR review, issue workflow, web search, browser/computer use, or image input/output.
 
@@ -83,9 +82,9 @@ Key features to match or consider:
 
 ## Task Roadmap
 
-### P0. Configurable Permissions And Sandboxing
+### P0. Configurable Permissions
 
-Status: implemented. Modes, config rules, command classification, protected paths, deny-by-default network classification, approval metadata, `/permissions` inspection/editing, config validation, and OpenSandbox command backend are in place.
+Status: implemented. Modes, config rules, command classification, protected paths, deny-by-default network classification, approval metadata, `/permissions` inspection/editing, and config validation are in place.
 
 Why:
 
@@ -95,13 +94,13 @@ Why:
 Tasks:
 
 - Done: add permission modes: `ask`, `accept-edits`, `plan`, and `bypass`.
-- Done: add config file rules under `~/.superagent/settings.json` for allow/deny tool names, command prefixes, paths, env vars, network mode, and OpenSandbox backend.
+- Done: add config file rules under `~/.superagent/settings.json` for allow/deny tool names, command prefixes, paths, env vars, and network mode.
 - Done: add protected paths: `.git`, `.env`, SSH keys, cloud credentials, and files outside cwd.
 - Done: add command classification for read-only, write, network, and destructive commands.
 - Done: add deny-by-default network mode for shell commands unless configured.
 - Done: add approval UI that shows command class, cwd, touched paths, and reason.
 - Done: add `/permissions` to inspect and edit current policy mode.
-- Done: validate permission modes and sandbox backend settings so OpenSandbox cannot silently fall back to local execution.
+- Done: validate permission modes so invalid settings fail config load.
 
 Architecture impact:
 
@@ -148,34 +147,14 @@ Acceptance:
 - MCP tool approval uses the same UI as built-in risky tools.
 - MCP server crash produces a tool result or session error without corrupting state.
 
-### P1. CLI, Headless Mode, And Local API
+### Out Of Scope: Headless CLI And Local API
 
 Why:
 
-- Current app is TUI-only.
-- Competitors support automation, local servers, and IDE/client integrations.
+- Super Agent intentionally keeps one interactive surface: the TUI.
+- Runtime ports exist to decouple architecture, not to add parallel UI or server products.
 
-Tasks:
-
-- Add `super-agent run "<prompt>"` for non-interactive execution.
-- Add flags: `--json`, `--cwd`, `--model`, `--provider`, `--resume`, `--approval-mode`, and `--timeout`.
-- Add `super-agent server` with HTTP endpoints for sessions, turns, approvals, snapshots, and streaming events.
-- Add WebSocket or SSE streaming for UI and IDE clients.
-- Add `super-agent tools list` and `super-agent models list`.
-- Make the TUI consume the same session API abstraction used by headless mode.
-
-Architecture impact:
-
-- Split `main.go` into command routing and app bootstrap.
-- Add `cli/` and `server/` packages.
-- `runtime/session` remains the core boundary.
-- `tui` becomes one client, not the only client.
-
-Acceptance:
-
-- Headless run can answer a prompt and exit with non-zero status on runtime error.
-- JSON mode emits machine-readable message and tool events.
-- Server can start a turn, stream chunks, pause for approval, and continue after approval.
+Do not add `cli/`, `server/`, HTTP, WebSocket, SSE, or JSON automation surfaces unless product scope changes explicitly.
 
 ### P1. Agent Modes, Subagents, And Worktrees
 
@@ -305,7 +284,7 @@ Tasks:
 
 Architecture impact:
 
-- `runtime/model` needs typed content parts.
+- `runtime/protocol` needs typed content parts.
 - TUI render path needs attachment previews.
 - Tool policy needs network/browser categories.
 
@@ -344,9 +323,8 @@ Acceptance:
 1. Durable core: session store, resume, compaction, layered instructions.
 2. Safe autonomy: permission modes, command analysis, checkpoint/undo.
 3. Extension parity: MCP stdio, dynamic registry, custom commands.
-4. Automation parity: headless CLI, server API, JSON events.
-5. Agent workflows: modes, subagents, worktrees, review workflows.
-6. Ecosystem polish: LSP, GitHub/CI, hooks, skills, sharing, multimodal.
+4. Agent workflows: modes, subagents, worktrees, review workflows within the TUI.
+5. Ecosystem polish: LSP, GitHub/CI, hooks, skills, sharing, multimodal.
 
 ## Current Architecture Summary
 
@@ -368,13 +346,13 @@ Core runtime flow:
 
 ```text
 UserMessageSubmitted
-  -> Transition
-  -> Reducer mutations
-  -> EffectScheduler queue
+  -> validated MachineSnapshot
+  -> context-aware Transition
+  -> transactional Reducer
+  -> atomic state + EffectScheduler commit
   -> EffectRunner
   -> EffectExecutor
-  -> ResultResolver
-  -> EventClassifier
+  -> OutcomeResolver
   -> Transition
 ```
 
@@ -382,10 +360,12 @@ Package roles:
 
 - `app/`: loads `.env`, settings, provider config, project instructions, and assembles a runtime session.
 - `llm/`: provider adapters. OpenAI-compatible and DeepSeek use chat completions. Claude uses Anthropic messages.
-- `runtime/model/`: shared types and interfaces for messages, tools, states, and streams.
-- `runtime/machine/`: pure state machine, events, mutations, effects, reducer, and transition table.
+- `runtime/protocol/`: model/tool adapter contracts for messages, calls, specs, and streams.
+- `runtime/permission/`: permission request and command classification values.
+- `runtime/machine/`: state-machine states and tool-batch state.
+- `runtime/machine/`: pure state machine, validated snapshots, invariants, events, mutations, effects, transactional reducer, and transition table.
 - `runtime/execution/`: effect execution, model/tool calls, approval classification, result resolving, scheduling, and run cancellation.
-- `runtime/engine/`: orchestration around state lock, transitions, effect draining, stale result dropping, and snapshots.
+- `runtime/engine/`: orchestration around atomic state/scheduler commits, effect draining, stale `RunID` dropping, and UI snapshots.
 - `runtime/session/`: UI-facing boundary, turn serialization, approval waiting, cancellation, reset, and session events.
 - `tools/`: compiled-in tool registry and built-in workspace tools.
 - `tui/`: Bubble Tea UI, slash commands, approvals, streaming render, and keyboard handling.
@@ -394,7 +374,8 @@ Package roles:
 Design invariant:
 
 - Transition rules stay in `runtime/machine/transition.go`.
-- Orchestration stays in `runtime/engine/engine.go`.
+- State and call-id invariants stay in `runtime/machine`; stale `RunID` filtering stays in the engine.
+- Orchestration stays in `runtime/engine/`.
 - Effect execution stays in `runtime/execution/`.
 - UI/session boundary stays in `runtime/session/`.
 - TUI displays state and collects input; it should not own runtime rules.

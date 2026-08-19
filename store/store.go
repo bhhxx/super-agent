@@ -11,9 +11,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
-	"super-agent/runtime/model"
+	"super-agent/runtime/protocol"
 )
 
 const (
@@ -45,17 +46,17 @@ type Metadata struct {
 }
 
 type Record struct {
-	Type       string          `json:"type"`
-	SessionID  SessionID       `json:"session_id"`
-	TurnID     TurnID          `json:"turn_id,omitempty"`
-	Time       time.Time       `json:"time"`
-	Message    *model.Message  `json:"message,omitempty"`
-	ToolCall   *model.ToolCall `json:"tool_call,omitempty"`
-	Decision   string          `json:"decision,omitempty"`
-	Result     string          `json:"result,omitempty"`
-	Error      string          `json:"error,omitempty"`
-	Checkpoint *Checkpoint     `json:"checkpoint,omitempty"`
-	Compact    *Compact        `json:"compact,omitempty"`
+	Type       string             `json:"type"`
+	SessionID  SessionID          `json:"session_id"`
+	TurnID     TurnID             `json:"turn_id,omitempty"`
+	Time       time.Time          `json:"time"`
+	Message    *protocol.Message  `json:"message,omitempty"`
+	ToolCall   *protocol.ToolCall `json:"tool_call,omitempty"`
+	Decision   string             `json:"decision,omitempty"`
+	Result     string             `json:"result,omitempty"`
+	Error      string             `json:"error,omitempty"`
+	Checkpoint *Checkpoint        `json:"checkpoint,omitempty"`
+	Compact    *Compact           `json:"compact,omitempty"`
 }
 
 type Checkpoint struct {
@@ -72,9 +73,9 @@ type FileSnapshot struct {
 }
 
 type Compact struct {
-	Summary          string          `json:"summary"`
-	OriginalMessages []model.Message `json:"original_messages"`
-	KeptMessages     []model.Message `json:"kept_messages"`
+	Summary          string             `json:"summary"`
+	OriginalMessages []protocol.Message `json:"original_messages"`
+	KeptMessages     []protocol.Message `json:"kept_messages"`
 }
 
 type Summary struct {
@@ -86,8 +87,12 @@ type Summary struct {
 	CWD       string    `json:"cwd"`
 }
 
+// Store serializes every access so concurrent writers, for example a
+// running turn and a user-initiated cancel, cannot interleave meta.json
+// read-modify-write cycles or tear event file reads.
 type Store struct {
 	root string
+	mu   sync.Mutex
 }
 
 func DefaultRoot() (string, error) {
@@ -120,10 +125,10 @@ func NewTurnID(now time.Time) TurnID {
 	return TurnID(now.UTC().Format("20060102T150405.000000000"))
 }
 
-func Fingerprint(messages []model.Message) string {
+func Fingerprint(messages []protocol.Message) string {
 	h := sha256.New()
 	for _, message := range messages {
-		if message.Role != model.RoleSystem {
+		if message.Role != protocol.RoleSystem {
 			continue
 		}
 		_, _ = h.Write([]byte(message.Content))
@@ -132,7 +137,9 @@ func Fingerprint(messages []model.Message) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func (s *Store) Create(meta Metadata, messages []model.Message) (Metadata, error) {
+func (s *Store) Create(meta Metadata, messages []protocol.Message) (Metadata, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if meta.ID == "" {
 		meta.ID = NewID(time.Now())
 	}
@@ -150,26 +157,38 @@ func (s *Store) Create(meta Metadata, messages []model.Message) (Metadata, error
 	if err := os.MkdirAll(s.sessionDir(meta.ID), 0700); err != nil {
 		return Metadata{}, err
 	}
-	if err := s.writeMeta(meta); err != nil {
-		return Metadata{}, err
-	}
-	if err := s.Append(meta.ID, Record{Type: EventSessionStarted}); err != nil {
+	// The transcript is written first and meta.json last: sessions become
+	// discoverable only once the metadata exists, so a partial failure
+	// removes the directory instead of leaving an orphan session behind.
+	if err := s.appendUnlocked(meta.ID, Record{Type: EventSessionStarted}); err != nil {
+		s.removeSessionDir(meta.ID)
 		return Metadata{}, err
 	}
 	for _, message := range messages {
 		msg := message
-		if err := s.Append(meta.ID, Record{Type: EventMessageAppended, Message: &msg}); err != nil {
+		if err := s.appendUnlocked(meta.ID, Record{Type: EventMessageAppended, Message: &msg}); err != nil {
+			s.removeSessionDir(meta.ID)
 			return Metadata{}, err
 		}
+	}
+	if err := s.writeMeta(meta); err != nil {
+		s.removeSessionDir(meta.ID)
+		return Metadata{}, err
 	}
 	return meta, nil
 }
 
 func (s *Store) Append(id SessionID, record Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.appendUnlocked(id, record)
+}
+
+func (s *Store) appendUnlocked(id SessionID, record Record) error {
 	if record.Type == "" {
 		return errors.New("record type is required")
 	}
-	meta, err := s.Metadata(id)
+	meta, err := s.metadataUnlocked(id)
 	if err == nil {
 		record.SessionID = id
 		if record.TurnID == "" {
@@ -203,6 +222,12 @@ func (s *Store) Append(id SessionID, record Record) error {
 }
 
 func (s *Store) Metadata(id SessionID) (Metadata, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.metadataUnlocked(id)
+}
+
+func (s *Store) metadataUnlocked(id SessionID) (Metadata, error) {
 	content, err := os.ReadFile(s.metaPath(id))
 	if err != nil {
 		return Metadata{}, err
@@ -215,7 +240,9 @@ func (s *Store) Metadata(id SessionID) (Metadata, error) {
 }
 
 func (s *Store) SetCurrentTurn(id SessionID, turn TurnID) error {
-	meta, err := s.Metadata(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta, err := s.metadataUnlocked(id)
 	if err != nil {
 		return err
 	}
@@ -225,11 +252,13 @@ func (s *Store) SetCurrentTurn(id SessionID, turn TurnID) error {
 }
 
 func (s *Store) Rename(id SessionID, title string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return errors.New("title is required")
 	}
-	meta, err := s.Metadata(id)
+	meta, err := s.metadataUnlocked(id)
 	if err != nil {
 		return err
 	}
@@ -239,10 +268,14 @@ func (s *Store) Rename(id SessionID, title string) error {
 }
 
 func (s *Store) Delete(id SessionID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return os.RemoveAll(s.sessionDir(id))
 }
 
 func (s *Store) List() ([]Summary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -255,7 +288,7 @@ func (s *Store) List() ([]Summary, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		meta, err := s.Metadata(SessionID(entry.Name()))
+		meta, err := s.metadataUnlocked(SessionID(entry.Name()))
 		if err != nil {
 			continue
 		}
@@ -271,6 +304,12 @@ func (s *Store) List() ([]Summary, error) {
 }
 
 func (s *Store) Records(id SessionID) ([]Record, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recordsUnlocked(id)
+}
+
+func (s *Store) recordsUnlocked(id SessionID) ([]Record, error) {
 	file, err := os.Open(s.eventsPath(id))
 	if err != nil {
 		return nil, err
@@ -289,12 +328,18 @@ func (s *Store) Records(id SessionID) ([]Record, error) {
 	return records, scanner.Err()
 }
 
-func (s *Store) Messages(id SessionID) ([]model.Message, error) {
-	records, err := s.Records(id)
+func (s *Store) Messages(id SessionID) ([]protocol.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := s.recordsUnlocked(id)
 	if err != nil {
 		return nil, err
 	}
-	var messages []model.Message
+	return messagesFromRecords(records), nil
+}
+
+func messagesFromRecords(records []Record) []protocol.Message {
+	var messages []protocol.Message
 	for _, record := range records {
 		switch record.Type {
 		case EventMessageAppended:
@@ -303,8 +348,8 @@ func (s *Store) Messages(id SessionID) ([]model.Message, error) {
 			}
 		case EventToolResult:
 			if record.ToolCall != nil {
-				messages = append(messages, model.Message{
-					Role: model.RoleTool, Content: record.Result,
+				messages = append(messages, protocol.Message{
+					Role: protocol.RoleTool, Content: record.Result,
 					ToolCallID: record.ToolCall.ID, ToolName: record.ToolCall.Name,
 				})
 			}
@@ -312,25 +357,80 @@ func (s *Store) Messages(id SessionID) ([]model.Message, error) {
 			messages = systemMessages(messages)
 		case EventCompact:
 			if record.Compact != nil {
-				messages = append([]model.Message(nil), record.Compact.KeptMessages...)
+				messages = append([]protocol.Message(nil), record.Compact.KeptMessages...)
 			}
 		}
 	}
-	return messages, nil
+	return messages
 }
 
 func (s *Store) LastCheckpoint(id SessionID) (*Checkpoint, error) {
-	records, err := s.Records(id)
+	checkpoint, _, _, err := s.CheckpointUndo(id)
+	return checkpoint, err
+}
+
+// CheckpointUndo returns the most recent checkpoint that carries file
+// snapshots, the transcript as of that checkpoint, and the record index
+// of the checkpoint. Checkpoints without files (tools that do not track
+// paths) are skipped so undo always has something to restore.
+func (s *Store) CheckpointUndo(id SessionID) (*Checkpoint, []protocol.Message, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := s.recordsUnlocked(id)
 	if err != nil {
-		return nil, err
+		return nil, nil, 0, err
 	}
 	for i := len(records) - 1; i >= 0; i-- {
-		if records[i].Type == EventCheckpoint && records[i].Checkpoint != nil {
-			cp := *records[i].Checkpoint
-			return &cp, nil
+		if records[i].Type == EventCheckpoint && records[i].Checkpoint != nil && len(records[i].Checkpoint.Files) > 0 {
+			checkpoint := *records[i].Checkpoint
+			return &checkpoint, messagesFromRecords(records[:i]), i, nil
 		}
 	}
-	return nil, os.ErrNotExist
+	return nil, nil, 0, os.ErrNotExist
+}
+
+// TruncateAfter drops every record after index keep, keeping the record
+// at keep itself (the checkpoint marker). Rewriting goes through a
+// temporary file so a failed write cannot corrupt the transcript.
+func (s *Store) TruncateAfter(id SessionID, keep int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := s.recordsUnlocked(id)
+	if err != nil {
+		return err
+	}
+	if keep < 0 || keep >= len(records)-1 {
+		return nil
+	}
+	tmp := s.eventsPath(id) + ".tmp"
+	if err := writeRecords(tmp, records[:keep+1]); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, s.eventsPath(id)); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func writeRecords(path string, records []Record) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	writer := bufio.NewWriter(file)
+	for _, record := range records {
+		encoded, err := json.Marshal(record)
+		if err != nil {
+			return err
+		}
+		if _, err := writer.Write(append(encoded, '\n')); err != nil {
+			return err
+		}
+	}
+	return writer.Flush()
 }
 
 func (s *Store) writeMeta(meta Metadata) error {
@@ -359,10 +459,14 @@ func (s *Store) eventsPath(id SessionID) string {
 	return filepath.Join(s.sessionDir(id), "events.jsonl")
 }
 
-func systemMessages(messages []model.Message) []model.Message {
-	var kept []model.Message
+func (s *Store) removeSessionDir(id SessionID) {
+	_ = os.RemoveAll(s.sessionDir(id))
+}
+
+func systemMessages(messages []protocol.Message) []protocol.Message {
+	var kept []protocol.Message
 	for _, message := range messages {
-		if message.Role == model.RoleSystem {
+		if message.Role == protocol.RoleSystem {
 			kept = append(kept, message)
 		}
 	}

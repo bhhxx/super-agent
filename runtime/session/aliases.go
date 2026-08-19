@@ -4,33 +4,34 @@ import (
 	enginepkg "super-agent/runtime/engine"
 	"super-agent/runtime/execution"
 	"super-agent/runtime/machine"
-	"super-agent/runtime/model"
+	"super-agent/runtime/protocol"
 )
 
-type State = model.State
+type State = machine.State
 
 const (
-	StateIdle            = model.StateIdle
-	StateWaitingApproval = model.StateWaitingApproval
+	StateIdle            = machine.StateIdle
+	StateWaitingApproval = machine.StateWaitingApproval
 )
 
-type Message = model.Message
-type ToolCall = model.ToolCall
-type PermissionRequest = model.PermissionRequest
+type Message = protocol.Message
+type ToolCall = protocol.ToolCall
+type PermissionRequest = machine.PermissionRequest
 type PermissionMode = execution.PermissionMode
 type PermissionRules = execution.PermissionRules
-type StreamChunk = model.StreamChunk
+type StreamChunk = protocol.StreamChunk
 type Engine = enginepkg.Engine
 type Snapshot = enginepkg.Snapshot
 type UserMessageSubmitted = machine.UserMessageSubmitted
 
 const (
-	PermissionModeAsk = execution.PermissionModeAsk
+	PermissionModeAsk    = execution.PermissionModeAsk
+	PermissionModeBypass = execution.PermissionModeBypass
 )
 
 var ValidPermissionMode = execution.ValidPermissionMode
 
 const (
-	RoleSystem = model.RoleSystem
-	RoleTool   = model.RoleTool
+	RoleSystem = protocol.RoleSystem
+	RoleTool   = protocol.RoleTool
 )

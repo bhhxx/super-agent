@@ -1,408 +1,98 @@
 package engine
 
 import (
-	"context"
-	"errors"
-	"strings"
 	"sync"
+
+	"super-agent/runtime/execution"
+	"super-agent/runtime/machine"
+	"super-agent/runtime/protocol"
 )
 
 type Engine struct {
-	mu         sync.Mutex
-	runner     EffectRunner
-	resolver   ResultResolver
-	classifier EventClassifier
-	reducer    Reducer
-	runs       RunController
-	approvals  ApprovalStore
-	state      EngineState
-	scheduler  *EffectScheduler
+	mu        sync.Mutex
+	runner    execution.EffectRunner
+	resolver  execution.OutcomeResolver
+	reducer   machine.Reducer
+	runs      execution.RunController
+	approvals execution.ApprovalStore
+	state     machine.EngineState
+	scheduler *execution.EffectScheduler
+
+	// stateObserver is notified after state-changing transitions while
+	// effects drain. It runs outside the engine lock so it can read
+	// snapshots. session.RunTurn installs a per-turn observer.
+	stateObserver func()
 }
 
 type policySetter interface {
-	SetPolicy(Policy)
+	SetPolicy(execution.Policy)
 }
 
 type policyStore interface {
-	SetPermissionPolicy(PermissionMode, PermissionRules)
+	SetPermissionPolicy(execution.PermissionMode, execution.PermissionRules)
 }
 
 type policySnapshot interface {
-	Mode() PermissionMode
-	Rules() PermissionRules
+	Mode() execution.PermissionMode
+	Rules() execution.PermissionRules
 }
 
-func NewEngine(model Model, tools ToolRunner, initial []Message) *Engine {
-	return NewEngineWithExecutor(NewDefaultEffectExecutor(model, tools), initial)
+func NewEngine(model protocol.Model, tools protocol.ToolRunner, initial []protocol.Message) *Engine {
+	return NewEngineWithExecutor(execution.NewDefaultEffectExecutor(model, tools), initial)
 }
 
-func NewEngineWithExecutor(executor EffectExecutor, initial []Message) *Engine {
-	approvals := NewMemoryApprovalStore()
-	policy := NewDefaultPolicy()
+func NewEngineWithExecutor(executor execution.EffectExecutor, initial []protocol.Message) *Engine {
+	approvals := execution.NewMemoryApprovalStore()
+	policy := execution.NewDefaultPolicy()
 	approvals.SetPermissionPolicy(policy.Mode(), policy.Rules())
 	return NewEngineWithComponents(
-		NewDefaultEffectRunner(executor),
-		DefaultResultResolver{},
-		NewDefaultEventClassifier(policy, approvals),
-		DefaultReducer{},
-		NewDefaultRunController(),
+		execution.NewDefaultEffectRunner(executor),
+		execution.NewDefaultOutcomeResolver(policy, approvals),
+		machine.DefaultReducer{},
+		execution.NewDefaultRunController(),
 		approvals,
 		initial,
 	)
 }
 
-func NewEngineWithExecutorAndPolicy(executor EffectExecutor, policy Policy, initial []Message) *Engine {
-	approvals := NewMemoryApprovalStore()
+func NewEngineWithExecutorAndPolicy(executor execution.EffectExecutor, policy execution.Policy, initial []protocol.Message) *Engine {
+	approvals := execution.NewMemoryApprovalStore()
 	if snapshot, ok := policy.(policySnapshot); ok {
 		approvals.SetPermissionPolicy(snapshot.Mode(), snapshot.Rules())
 	}
-	return NewEngineWithComponents(NewDefaultEffectRunner(executor), DefaultResultResolver{}, NewDefaultEventClassifier(policy, approvals), DefaultReducer{}, NewDefaultRunController(), approvals, initial)
+	return NewEngineWithComponents(execution.NewDefaultEffectRunner(executor), execution.NewDefaultOutcomeResolver(policy, approvals), machine.DefaultReducer{}, execution.NewDefaultRunController(), approvals, initial)
 }
 
-func NewEngineWithComponents(runner EffectRunner, resolver ResultResolver, classifier EventClassifier, reducer Reducer, runs RunController, approvals ApprovalStore, initial []Message) *Engine {
-	messages := append([]Message(nil), initial...)
+func NewEngineWithComponents(runner execution.EffectRunner, resolver execution.OutcomeResolver, reducer machine.Reducer, runs execution.RunController, approvals execution.ApprovalStore, initial []protocol.Message) *Engine {
+	messages := append([]protocol.Message(nil), initial...)
 	return &Engine{
-		runner:     runner,
-		resolver:   resolver,
-		classifier: classifier,
-		reducer:    reducer,
-		runs:       runs,
-		approvals:  approvals,
-		scheduler:  NewEffectScheduler(),
-		state: EngineState{
-			State:    StateInitializing,
+		runner:    runner,
+		resolver:  resolver,
+		reducer:   reducer,
+		runs:      runs,
+		approvals: approvals,
+		scheduler: execution.NewEffectScheduler(),
+		state: machine.EngineState{
+			State:    machine.StateInitializing,
 			Messages: messages,
 		},
 	}
 }
 
-func (e *Engine) EnableAutoApproveTools() {
-	e.approvals.SetAutoApproveTools(true)
-}
-
-func (e *Engine) State() State {
+// SetStateObserver registers a callback fired after state-changing
+// transitions while effects drain. The callback runs outside the engine
+// lock so it can read snapshots.
+func (e *Engine) SetStateObserver(observer func()) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.state.State
+	e.stateObserver = observer
 }
 
-func (e *Engine) Messages() []Message {
+func (e *Engine) notifyStateObserver() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	return append([]Message(nil), e.state.Messages...)
-}
-
-func (e *Engine) PendingTool() (ToolCall, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.state.PendingTool == nil {
-		return ToolCall{}, false
-	}
-	return *e.state.PendingTool, true
-}
-
-func (e *Engine) QueuedToolCalls() []ToolCall {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.state.ToolBatch == nil || e.state.ToolBatch.Index >= len(e.state.ToolBatch.Calls) {
-		return nil
-	}
-	return append([]ToolCall(nil), e.state.ToolBatch.Calls[e.state.ToolBatch.Index:]...)
-}
-
-func (e *Engine) Snapshot() Snapshot {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	snapshot := Snapshot{
-		State:      e.state.State,
-		Messages:   append([]Message(nil), e.state.Messages...),
-		IsBusy:     e.state.State == StateWaitingLLM || e.state.State == StateRunningTool || e.state.State == StateAdvancingQueue,
-		NeedsInput: e.state.State == StateWaitingApproval,
-	}
-	if e.state.PendingTool != nil {
-		call := *e.state.PendingTool
-		snapshot.PendingTool = &call
-		if e.state.PendingPermission != nil {
-			request := *e.state.PendingPermission
-			snapshot.PendingPermission = &request
-		}
-		if e.state.ToolBatch != nil {
-			snapshot.PendingToolBatchID = e.state.ToolBatch.ID
-			snapshot.PendingToolBatchIndex = e.state.ToolBatch.Index
-			snapshot.PendingToolBatchTotal = len(e.state.ToolBatch.Calls)
-		}
-	}
-	if e.state.StreamingContent != "" || e.state.StreamingReasoning != "" {
-		snapshot.StreamingMessage = &Message{
-			Role:             RoleAssistant,
-			Content:          e.state.StreamingContent,
-			ReasoningContent: e.state.StreamingReasoning,
-		}
-	}
-	return snapshot
-}
-
-func (e *Engine) Ready() error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.dispatchLocked(EngineReady{})
-}
-
-func (e *Engine) Approve(ctx context.Context, chunkFunc func(StreamChunk)) error {
-	e.mu.Lock()
-	if e.state.State != StateWaitingApproval || e.state.PendingTool == nil {
-		e.mu.Unlock()
-		return errors.New("no tool is waiting for approval")
-	}
-	call := *e.state.PendingTool
-	err := e.dispatchLocked(ApprovalGranted{Call: call})
+	observer := e.stateObserver
 	e.mu.Unlock()
-	if err != nil {
-		return err
+	if observer != nil {
+		observer()
 	}
-	runCtx, ok := e.runs.CurrentContext()
-	if !ok {
-		return errors.New("no active run context")
-	}
-	return e.runPendingEffects(runCtx, chunkFunc)
-}
-
-func (e *Engine) ApproveAlways(ctx context.Context, chunkFunc func(StreamChunk)) error {
-	e.mu.Lock()
-	if e.state.State != StateWaitingApproval || e.state.PendingTool == nil {
-		e.mu.Unlock()
-		return errors.New("no tool is waiting for approval")
-	}
-	call := *e.state.PendingTool
-	err := e.dispatchLocked(ApprovalAlwaysGranted{Call: call})
-	e.mu.Unlock()
-	if err != nil {
-		return err
-	}
-
-	e.approvals.AllowAlways(NewApprovalKey(call))
-
-	runCtx, ok := e.runs.CurrentContext()
-	if !ok {
-		return errors.New("no active run context")
-	}
-	return e.runPendingEffects(runCtx, chunkFunc)
-}
-
-func (e *Engine) Deny(ctx context.Context, chunkFunc func(StreamChunk)) error {
-	e.mu.Lock()
-	if e.state.State != StateWaitingApproval || e.state.PendingTool == nil {
-		e.mu.Unlock()
-		return errors.New("no tool is waiting for approval")
-	}
-	call := *e.state.PendingTool
-	err := e.dispatchLocked(ApprovalDenied{Call: call})
-	e.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	runCtx, ok := e.runs.CurrentContext()
-	if !ok {
-		return errors.New("no active run context")
-	}
-	return e.runPendingEffects(runCtx, chunkFunc)
-}
-
-func (e *Engine) Cancel() error {
-	e.runs.CancelRun()
-	return e.dispatch(CancelRequested{})
-}
-
-func (e *Engine) Reset() error {
-	e.runs.CancelRun()
-	e.runs.StartNewGeneration()
-	return e.dispatch(ResetRequested{})
-}
-
-func (e *Engine) ReplaceMessages(messages []Message) {
-	e.runs.CancelRun()
-	e.runs.StartNewGeneration()
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.state.Messages = append([]Message(nil), messages...)
-	e.state.PendingTool = nil
-	e.state.PendingPermission = nil
-	e.state.ToolBatch = nil
-	e.state.StreamingContent = ""
-	e.state.StreamingReasoning = ""
-	e.state.State = StateIdle
-	e.scheduler.Clear()
-}
-
-func (e *Engine) SetPermissionPolicy(mode PermissionMode, rules PermissionRules) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if !ValidPermissionMode(mode) {
-		return errors.New("invalid permission mode: " + string(mode))
-	}
-	setter, ok := e.classifier.(policySetter)
-	if !ok {
-		return errors.New("event classifier does not support policy updates")
-	}
-	setter.SetPolicy(NewPolicy(mode, rules))
-	if store, ok := e.approvals.(policyStore); ok {
-		store.SetPermissionPolicy(mode, rules)
-	}
-	return nil
-}
-
-func (e *Engine) CompactSummary(ctx context.Context) (string, error) {
-	messages := e.Messages()
-	if len(messages) == 0 {
-		return "", nil
-	}
-	prompt := Message{
-		Role:    RoleUser,
-		Content: "Summarize this conversation for context compaction. Preserve goals, decisions, files changed, tool results, and unresolved next steps.",
-	}
-	input := ExecutionInput{Messages: append(messages, prompt), ToolSpecs: nil}
-	outcome, err := e.runner.Run(ctx, QueuedEffect{Effect: CallModel{}}, input, nil)
-	if err != nil {
-		return "", err
-	}
-	reply, ok := outcome.Result.(ModelReplied)
-	if !ok {
-		return "", errors.New("compact summary did not return a model response")
-	}
-	summary := strings.TrimSpace(reply.Response.Content)
-	if summary == "" {
-		summary = strings.TrimSpace(reply.Response.ReasoningContent)
-	}
-	if summary == "" {
-		return "", errors.New("compact summary is empty")
-	}
-	return summary, nil
-}
-
-func (e *Engine) DispatchEventThenRunEffects(ctx context.Context, event Event, chunkFunc func(StreamChunk), afterDispatch func()) error {
-	e.mu.Lock()
-	decision, err := Transition(e.state.State, event)
-	if err != nil {
-		e.mu.Unlock()
-		return err
-	}
-	_, runCtx := e.runs.StartRun(ctx)
-	if err := e.applyTransitionLocked(decision); err != nil {
-		e.mu.Unlock()
-		return err
-	}
-	e.mu.Unlock()
-	afterDispatch()
-	return e.runPendingEffects(runCtx, chunkFunc)
-}
-
-func (e *Engine) dispatch(event Event) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.dispatchLocked(event)
-}
-
-func (e *Engine) dispatchLocked(event Event) error {
-	decision, err := Transition(e.state.State, event)
-	if err != nil {
-		return err
-	}
-	return e.applyTransitionLocked(decision)
-}
-
-func (e *Engine) applyTransitionLocked(decision TransitionResult) error {
-	e.state.State = decision.NextState
-	for _, m := range decision.Mutations {
-		e.reducer.Apply(&e.state, e.scheduler.Clear, m)
-	}
-	for _, effect := range decision.Effects {
-		e.scheduler.Queue(e.runs.CurrentRunID(), effect)
-	}
-	return nil
-}
-
-func (e *Engine) runPendingEffects(ctx context.Context, chunkFunc func(StreamChunk)) error {
-	runID := e.runs.CurrentRunID()
-	for {
-		e.mu.Lock()
-		effect, ok := e.scheduler.Pop()
-		if !ok {
-			if e.state.State == StateIdle {
-				e.runs.FinishRun(runID)
-			}
-			e.mu.Unlock()
-			return nil
-		}
-		e.mu.Unlock()
-		if err := e.executeEffect(ctx, effect, chunkFunc); err != nil {
-			if errors.Is(err, context.Canceled) {
-				e.runs.CancelRun()
-				_ = e.dispatch(CancelRequested{})
-			} else {
-				_ = e.dispatch(ErrorOccurred{Err: err})
-			}
-			return err
-		}
-	}
-}
-
-func (e *Engine) executeEffect(ctx context.Context, effect QueuedEffect, chunkFunc func(StreamChunk)) error {
-	streamFunc := chunkFunc
-	if chunkFunc != nil {
-		streamFunc = func(chunk StreamChunk) {
-			e.recordStreamChunk(effect.RunID, chunk)
-			chunkFunc(chunk)
-		}
-	}
-	outcome, err := e.runner.Run(ctx, effect, ExecutionInput{
-		Messages:  e.Messages(),
-		ToolSpecs: e.toolSpecs(),
-	}, streamFunc)
-	if err != nil {
-		return err
-	}
-	if !e.runs.IsCurrent(outcome.RunID) {
-		return nil
-	}
-	toolSpecs := e.toolSpecs()
-	e.mu.Lock()
-	var batch *ToolCallBatch
-	if e.state.ToolBatch != nil {
-		copied := ToolCallBatch{
-			ID:    e.state.ToolBatch.ID,
-			Calls: append([]ToolCall(nil), e.state.ToolBatch.Calls...),
-			Index: e.state.ToolBatch.Index,
-		}
-		batch = &copied
-	}
-	event, err := e.resolver.Resolve(outcome.Result, ResultResolveInput{
-		ToolBatch: batch,
-	})
-	if err == nil {
-		event, err = e.classifier.Classify(event, EventClassifyInput{ToolSpecs: toolSpecs})
-	}
-	if err != nil {
-		dispatchErr := e.dispatchLocked(ErrorOccurred{Err: err})
-		e.mu.Unlock()
-		if dispatchErr != nil {
-			return dispatchErr
-		}
-		return err
-	}
-	err = e.dispatchLocked(event)
-	e.mu.Unlock()
-	return err
-}
-
-func (e *Engine) toolSpecs() []ToolSpec {
-	return e.runner.ToolSpecs()
-}
-
-func (e *Engine) recordStreamChunk(runID RunID, chunk StreamChunk) {
-	if !e.runs.IsCurrent(runID) {
-		return
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.reducer.Apply(&e.state, e.scheduler.Clear, AppendStreamingAssistant{Chunk: chunk})
 }

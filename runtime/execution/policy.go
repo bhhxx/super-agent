@@ -1,7 +1,6 @@
 package execution
 
 import (
-	"encoding/json"
 	"path/filepath"
 	"strings"
 )
@@ -24,18 +23,15 @@ const (
 )
 
 type PermissionRules struct {
-	AllowTools     []string `json:"allow_tools,omitempty"`
-	DenyTools      []string `json:"deny_tools,omitempty"`
-	AllowPrefixes  []string `json:"allow_command_prefixes,omitempty"`
-	DenyPrefixes   []string `json:"deny_command_prefixes,omitempty"`
-	AllowPaths     []string `json:"allow_paths,omitempty"`
-	DenyPaths      []string `json:"deny_paths,omitempty"`
-	AllowEnv       []string `json:"allow_env,omitempty"`
-	DenyEnv        []string `json:"deny_env,omitempty"`
-	Network        string   `json:"network,omitempty"`
-	OpenSandboxID  string   `json:"opensandbox_id,omitempty"`
-	OpenSandboxCLI string   `json:"opensandbox_cli,omitempty"`
-	OpenSandboxCWD string   `json:"opensandbox_cwd,omitempty"`
+	AllowTools    []string `json:"allow_tools,omitempty"`
+	DenyTools     []string `json:"deny_tools,omitempty"`
+	AllowPrefixes []string `json:"allow_command_prefixes,omitempty"`
+	DenyPrefixes  []string `json:"deny_command_prefixes,omitempty"`
+	AllowPaths    []string `json:"allow_paths,omitempty"`
+	DenyPaths     []string `json:"deny_paths,omitempty"`
+	AllowEnv      []string `json:"allow_env,omitempty"`
+	DenyEnv       []string `json:"deny_env,omitempty"`
+	Network       string   `json:"network,omitempty"`
 }
 
 type ToolPolicyInput struct {
@@ -62,9 +58,6 @@ func NewPolicy(mode PermissionMode, rules PermissionRules) *DefaultPolicy {
 		mode = PermissionModeAsk
 	}
 	rules.Network = strings.ToLower(strings.TrimSpace(rules.Network))
-	if rules.OpenSandboxCLI == "" {
-		rules.OpenSandboxCLI = "osb"
-	}
 	return &DefaultPolicy{mode: mode, rules: rules}
 }
 
@@ -269,117 +262,4 @@ func isRiskyTool(name string, specs []ToolSpec) bool {
 		}
 	}
 	return true
-}
-
-func analyzeCommandRequest(req PermissionRequest) PermissionRequest {
-	command := strings.TrimSpace(req.Command)
-	req.TouchedPaths = append(req.TouchedPaths, commandPaths(command)...)
-	req.EnvVars = commandEnv(command)
-	switch {
-	case command == "":
-		req.CommandClass = CommandClassUnknown
-		req.Reason = "empty command"
-	case hasAnyToken(command, []string{"rm", "rmdir", "shred", "mkfs", "dd", "chmod", "chown", "sudo"}) || strings.Contains(command, "rm -rf"):
-		req.CommandClass = CommandClassDestructive
-		req.Reason = "destructive shell command"
-	case hasAnyToken(command, []string{"curl", "wget", "ssh", "scp", "rsync", "nc", "ncat", "telnet", "ftp", "pip", "npm", "go"}) && containsNetworkIntent(command):
-		req.CommandClass = CommandClassNetwork
-		req.Reason = "network-capable shell command"
-	case strings.Contains(command, ">") || strings.Contains(command, ">>") || strings.Contains(command, "| tee") || hasAnyToken(command, []string{"touch", "mkdir", "mv", "cp", "sed", "perl", "gofmt", "git"}):
-		if strings.HasPrefix(command, "git status") || strings.HasPrefix(command, "git diff") || strings.HasPrefix(command, "git show") || strings.HasPrefix(command, "git log") || strings.HasPrefix(command, "git branch") {
-			req.CommandClass = CommandClassReadOnly
-			req.Reason = "read-only git command"
-			break
-		}
-		req.CommandClass = CommandClassWrite
-		req.Reason = "shell command may write files"
-	default:
-		req.CommandClass = CommandClassReadOnly
-		req.Reason = "read-only shell command"
-	}
-	return req
-}
-
-func hasAnyToken(command string, tokens []string) bool {
-	fields := strings.Fields(command)
-	for _, field := range fields {
-		field = strings.Trim(field, "'\";|&()")
-		for _, token := range tokens {
-			if field == token {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func containsNetworkIntent(command string) bool {
-	return strings.Contains(command, "://") || strings.Contains(command, " install") || strings.Contains(command, " get ") || strings.Contains(command, " clone ") || strings.Contains(command, "fetch")
-}
-
-func commandPaths(command string) []string {
-	var paths []string
-	for _, field := range strings.Fields(command) {
-		field = strings.Trim(field, "'\";,")
-		if strings.HasPrefix(field, "/") || strings.HasPrefix(field, "./") || strings.HasPrefix(field, "../") || strings.HasPrefix(field, ".") {
-			paths = append(paths, field)
-		}
-	}
-	return paths
-}
-
-func commandEnv(command string) []string {
-	var env []string
-	for _, field := range strings.Fields(command) {
-		if idx := strings.Index(field, "="); idx > 0 && strings.ToUpper(field[:idx]) == field[:idx] {
-			env = append(env, field[:idx])
-		}
-	}
-	return env
-}
-
-func toolPaths(call ToolCall) []string {
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(call.Input), &raw); err != nil {
-		return nil
-	}
-	var paths []string
-	for _, key := range []string{"path", "cwd"} {
-		if value, ok := raw[key].(string); ok && value != "" {
-			paths = append(paths, value)
-		}
-	}
-	if values, ok := raw["paths"].([]any); ok {
-		for _, value := range values {
-			if path, ok := value.(string); ok && path != "" {
-				paths = append(paths, path)
-			}
-		}
-	}
-	if values, ok := raw["files"].([]any); ok {
-		for _, value := range values {
-			if path, ok := value.(string); ok && path != "" {
-				paths = append(paths, path)
-			}
-		}
-	}
-	return paths
-}
-
-func jsonStringField(input, field string) string {
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(input), &raw); err != nil {
-		return ""
-	}
-	value, _ := raw[field].(string)
-	return value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }

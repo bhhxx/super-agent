@@ -23,12 +23,6 @@ func TestLoadConfigCombinesFlagsEnvAndSettings(t *testing.T) {
 			"network": "allow",
 			"allow_command_prefixes": ["git status"]
 		},
-		"sandbox": {
-			"backend": "opensandbox",
-			"opensandbox_id": "sbx-1",
-			"opensandbox_cli": "osb-dev",
-			"opensandbox_cwd": "/workspace"
-		},
 		"providers": {
 			"claude": {
 				"base_url": "https://claude.test",
@@ -63,9 +57,6 @@ func TestLoadConfigCombinesFlagsEnvAndSettings(t *testing.T) {
 	}
 	if cfg.PermissionMode != "bypass" {
 		t.Fatalf("PermissionMode = %q, want bypass", cfg.PermissionMode)
-	}
-	if cfg.PermissionRules.OpenSandboxID != "sbx-1" || cfg.PermissionRules.OpenSandboxCLI != "osb-dev" || cfg.PermissionRules.OpenSandboxCWD != "/workspace" {
-		t.Fatalf("PermissionRules sandbox = %+v", cfg.PermissionRules)
 	}
 	if len(cfg.PermissionRules.AllowPrefixes) != 1 || cfg.PermissionRules.AllowPrefixes[0] != "git status" {
 		t.Fatalf("AllowPrefixes = %+v", cfg.PermissionRules.AllowPrefixes)
@@ -113,44 +104,6 @@ func TestLoadConfigRejectsInvalidPermissionMode(t *testing.T) {
 	}
 }
 
-func TestLoadConfigRejectsInvalidSandboxBackend(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	settingsDir := filepath.Join(home, ".superagent")
-	if err := os.MkdirAll(settingsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	settings := `{"provider":"openai","sandbox":{"backend":"docker"},"providers":{"openai":{"api_key":"key","model":"model"}}}`
-	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(settings), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := LoadConfig(Flags{}, lookup(nil))
-
-	if err == nil || !strings.Contains(err.Error(), "invalid sandbox backend: docker") {
-		t.Fatalf("err = %v, want invalid sandbox backend", err)
-	}
-}
-
-func TestLoadConfigRequiresOpenSandboxID(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	settingsDir := filepath.Join(home, ".superagent")
-	if err := os.MkdirAll(settingsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	settings := `{"provider":"openai","sandbox":{"backend":"opensandbox"},"providers":{"openai":{"api_key":"key","model":"model"}}}`
-	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(settings), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := LoadConfig(Flags{}, lookup(nil))
-
-	if err == nil || !strings.Contains(err.Error(), "sandbox.opensandbox_id is required") {
-		t.Fatalf("err = %v, want missing opensandbox id", err)
-	}
-}
-
 func TestLoadConfigCreatesDefaultSettingsWhenMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
@@ -190,11 +143,8 @@ func TestLoadSettingsFileCreatesTemplateWhenMissing(t *testing.T) {
 	if settings.Permissions.Mode != "ask" || settings.Permissions.Network != "deny" {
 		t.Fatalf("permissions template = %+v", settings.Permissions)
 	}
-	if settings.Sandbox.Backend != "local" || settings.Sandbox.OpenSandboxCLI != "osb" || settings.Sandbox.OpenSandboxCWD != "/workspace" {
-		t.Fatalf("sandbox template = %+v", settings.Sandbox)
-	}
-	if !strings.Contains(string(content), `"sandbox"`) || !strings.Contains(string(content), `"permissions"`) {
-		t.Fatalf("generated settings missing discoverable permissions/sandbox sections: %s", string(content))
+	if !strings.Contains(string(content), `"permissions"`) {
+		t.Fatalf("generated settings missing discoverable permissions section: %s", string(content))
 	}
 }
 
@@ -226,5 +176,37 @@ func lookup(values map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {
 		value, ok := values[key]
 		return value, ok
+	}
+}
+
+func TestYOLOEnvDoesNotOverrideExplicitApprovalMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg, err := LoadConfig(Flags{PermissionMode: "ask"}, lookup(map[string]string{"YOLO": "true"}))
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.PermissionMode != "ask" {
+		t.Fatalf("PermissionMode = %q, want ask: an explicit --approval-mode flag must win over YOLO", cfg.PermissionMode)
+	}
+	if cfg.AutoApproveTools {
+		t.Fatal("AutoApproveTools = true, want false")
+	}
+}
+
+func TestYOLOEnvEnablesBypassWithoutExplicitMode(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg, err := LoadConfig(Flags{}, lookup(map[string]string{"YOLO": "true"}))
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+	if cfg.PermissionMode != "bypass" {
+		t.Fatalf("PermissionMode = %q, want bypass", cfg.PermissionMode)
+	}
+	if !cfg.AutoApproveTools {
+		t.Fatal("AutoApproveTools = false, want true")
 	}
 }

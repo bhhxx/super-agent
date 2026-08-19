@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"super-agent/runtime"
+	runtime "super-agent/runtime/protocol"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"

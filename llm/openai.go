@@ -10,7 +10,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/shared"
 
-	"super-agent/runtime"
+	runtime "super-agent/runtime/protocol"
 )
 
 func NewOpenAI(cfg Config) *OpenAIModel {

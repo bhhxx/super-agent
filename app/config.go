@@ -23,7 +23,6 @@ type Config struct {
 	NoTools            bool
 	PermissionMode     runtime.PermissionMode
 	PermissionRules    runtime.PermissionRules
-	Sandbox            SandboxSettings
 	ModelConfig        llm.Config
 	InstructionSources []string
 }
@@ -32,7 +31,6 @@ type Settings struct {
 	Provider    string                `json:"provider"`
 	Providers   map[string]llm.Config `json:"providers"`
 	Permissions PermissionSettings    `json:"permissions"`
-	Sandbox     SandboxSettings       `json:"sandbox"`
 }
 
 type PermissionSettings struct {
@@ -46,13 +44,6 @@ type PermissionSettings struct {
 	AllowEnv             []string `json:"allow_env"`
 	DenyEnv              []string `json:"deny_env"`
 	Network              string   `json:"network"`
-}
-
-type SandboxSettings struct {
-	Backend        string `json:"backend"`
-	OpenSandboxID  string `json:"opensandbox_id"`
-	OpenSandboxCLI string `json:"opensandbox_cli"`
-	OpenSandboxCWD string `json:"opensandbox_cwd"`
 }
 
 func DefaultSettings() Settings {
@@ -77,11 +68,6 @@ func DefaultSettings() Settings {
 			Mode:    "ask",
 			Network: "deny",
 		},
-		Sandbox: SandboxSettings{
-			Backend:        "local",
-			OpenSandboxCLI: "osb",
-			OpenSandboxCWD: "/workspace",
-		},
 	}
 }
 
@@ -103,33 +89,25 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 		return Config{}, err
 	}
 	mode := runtime.PermissionMode(firstNonEmpty(flags.PermissionMode, settings.Permissions.Mode, "ask"))
-	if flags.AutoApproveTools || envTrue(lookup, "YOLO") {
+	// The YOLO environment variable is a fallback for when no explicit
+	// mode was requested; an explicit --approval-mode flag always wins so
+	// a checked-in .env cannot silently disable permission prompts.
+	if flags.AutoApproveTools || (flags.PermissionMode == "" && envTrue(lookup, "YOLO")) {
 		mode = runtime.PermissionModeBypass
 	}
 	if !runtime.ValidPermissionMode(mode) {
 		return Config{}, errors.New("invalid permission mode: " + string(mode))
 	}
-	if settings.Sandbox.Backend != "local" && settings.Sandbox.Backend != "opensandbox" {
-		return Config{}, errors.New("invalid sandbox backend: " + settings.Sandbox.Backend)
-	}
-	if settings.Sandbox.Backend == "opensandbox" && settings.Sandbox.OpenSandboxID == "" {
-		return Config{}, errors.New("sandbox.opensandbox_id is required when sandbox.backend is opensandbox")
-	}
 	rules := runtime.PermissionRules{
-		AllowTools:     settings.Permissions.AllowTools,
-		DenyTools:      settings.Permissions.DenyTools,
-		AllowPrefixes:  settings.Permissions.AllowCommandPrefixes,
-		DenyPrefixes:   settings.Permissions.DenyCommandPrefixes,
-		AllowPaths:     settings.Permissions.AllowPaths,
-		DenyPaths:      settings.Permissions.DenyPaths,
-		AllowEnv:       settings.Permissions.AllowEnv,
-		DenyEnv:        settings.Permissions.DenyEnv,
-		Network:        firstNonEmpty(settings.Permissions.Network, "deny"),
-		OpenSandboxCLI: firstNonEmpty(settings.Sandbox.OpenSandboxCLI, "osb"),
-		OpenSandboxCWD: settings.Sandbox.OpenSandboxCWD,
-	}
-	if settings.Sandbox.Backend == "opensandbox" {
-		rules.OpenSandboxID = settings.Sandbox.OpenSandboxID
+		AllowTools:    settings.Permissions.AllowTools,
+		DenyTools:     settings.Permissions.DenyTools,
+		AllowPrefixes: settings.Permissions.AllowCommandPrefixes,
+		DenyPrefixes:  settings.Permissions.DenyCommandPrefixes,
+		AllowPaths:    settings.Permissions.AllowPaths,
+		DenyPaths:     settings.Permissions.DenyPaths,
+		AllowEnv:      settings.Permissions.AllowEnv,
+		DenyEnv:       settings.Permissions.DenyEnv,
+		Network:       firstNonEmpty(settings.Permissions.Network, "deny"),
 	}
 	return Config{
 		Provider:           provider,
@@ -137,7 +115,6 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 		NoTools:            flags.NoTools || envTrue(lookup, "NO_TOOLS"),
 		PermissionMode:     mode,
 		PermissionRules:    rules,
-		Sandbox:            settings.Sandbox,
 		ModelConfig:        settings.Providers[provider],
 		InstructionSources: instructionSourcePaths(bundle),
 	}, nil
@@ -202,14 +179,5 @@ func normalizeSettings(settings *Settings) {
 	}
 	if settings.Permissions.Network == "" {
 		settings.Permissions.Network = "deny"
-	}
-	if settings.Sandbox.Backend == "" {
-		settings.Sandbox.Backend = "local"
-	}
-	if settings.Sandbox.OpenSandboxCLI == "" {
-		settings.Sandbox.OpenSandboxCLI = "osb"
-	}
-	if settings.Sandbox.OpenSandboxCWD == "" {
-		settings.Sandbox.OpenSandboxCWD = "/workspace"
 	}
 }

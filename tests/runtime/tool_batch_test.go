@@ -12,10 +12,11 @@ func TestToolBatchReceivedAdvancesThroughUnifiedApprovalEvents(t *testing.T) {
 		{ID: "call-2", Name: "bash", Input: "two"},
 	}
 
-	start, err := Transition(StateWaitingLLM, ToolBatchReceived{
+	startEvent := ToolBatchReceived{
 		Content: "need tools",
 		Calls:   calls,
-	})
+	}
+	start, err := Transition(transitionSnapshot(StateWaitingLLM, startEvent), startEvent)
 	if err != nil {
 		t.Fatalf("Transition failed: %v", err)
 	}
@@ -29,7 +30,8 @@ func TestToolBatchReceivedAdvancesThroughUnifiedApprovalEvents(t *testing.T) {
 		t.Fatalf("effect = %T, want ProcessNextToolCall", start.Effects[0])
 	}
 
-	first, err := Transition(StateAdvancingQueue, ToolCallNeedsApproval{Call: calls[0]})
+	firstEvent := ToolCallNeedsApproval{Call: calls[0]}
+	first, err := Transition(transitionSnapshot(StateAdvancingQueue, firstEvent), firstEvent)
 	if err != nil {
 		t.Fatalf("Transition failed: %v", err)
 	}
@@ -37,7 +39,8 @@ func TestToolBatchReceivedAdvancesThroughUnifiedApprovalEvents(t *testing.T) {
 		t.Fatalf("state = %s, want %s", first.NextState, StateWaitingApproval)
 	}
 
-	second, err := Transition(StateAdvancingQueue, ToolCallNeedsApproval{Call: calls[1]})
+	secondEvent := ToolCallNeedsApproval{Call: calls[1]}
+	second, err := Transition(transitionSnapshot(StateAdvancingQueue, secondEvent), secondEvent)
 	if err != nil {
 		t.Fatalf("Transition failed: %v", err)
 	}

@@ -8,9 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
-	"super-agent/runtime"
+	runtime "super-agent/runtime/protocol"
 )
 
 const (
@@ -19,19 +18,11 @@ const (
 	defaultOutputBytes    = 20000
 )
 
-type RunCommandTool struct {
-	Config Config
-}
+type RunCommandTool struct{}
 type GoTestTool struct{}
 type FormatTool struct{}
 type GitStatusTool struct{}
 type GitDiffTool struct{}
-
-type OpenSandboxCommandRunner struct {
-	CLI       string
-	SandboxID string
-	Workdir   string
-}
 
 func (RunCommandTool) Spec() runtime.ToolSpec {
 	return runtime.ToolSpec{
@@ -68,13 +59,6 @@ func (t RunCommandTool) Run(ctx context.Context, call runtime.ToolCall) (string,
 	}
 	if args.CWD == "" {
 		args.CWD = "."
-	}
-	if runner := openSandboxRunner(t.Config, args.CWD); runner != nil {
-		output, err := runner.Run(ctx, args.TimeoutSeconds, args.MaxOutputBytes, args.Command)
-		if err != nil && !args.ContinueOnError {
-			return output, err
-		}
-		return output, nil
 	}
 	output, err := runShell(ctx, cwd, args.TimeoutSeconds, args.MaxOutputBytes, args.Command)
 	if err != nil && !args.ContinueOnError {
@@ -217,82 +201,6 @@ func commandCWD(cwd string) (string, error) {
 
 func runShell(ctx context.Context, cwd string, timeoutSeconds int, maxBytes int, command string) (string, error) {
 	return runExec(ctx, cwd, commandTimeout(timeoutSeconds), outputLimit(maxBytes), "bash", "-lc", command)
-}
-
-func openSandboxRunner(cfg Config, cwd string) *OpenSandboxCommandRunner {
-	if cfg.OpenSandboxID == "" {
-		return nil
-	}
-	cli := cfg.OpenSandboxCLI
-	if cli == "" {
-		cli = "osb"
-	}
-	workdir := cfg.OpenSandboxCWD
-	if workdir == "" && cwd != "" && cwd != "." {
-		workdir = cwd
-	}
-	return &OpenSandboxCommandRunner{CLI: cli, SandboxID: cfg.OpenSandboxID, Workdir: workdir}
-}
-
-func (r *OpenSandboxCommandRunner) Run(ctx context.Context, timeoutSeconds int, maxBytes int, command string) (string, error) {
-	argv, err := splitCommandLine(r.CLI)
-	if err != nil {
-		return "", err
-	}
-	if len(argv) == 0 {
-		return "", errors.New("opensandbox cli is required")
-	}
-	args := append([]string{}, argv[1:]...)
-	args = append(args, "command", "run", r.SandboxID, "-o", "raw")
-	if r.Workdir != "" {
-		args = append(args, "--workdir", r.Workdir)
-	}
-	if timeoutSeconds > 0 {
-		args = append(args, "--timeout", strconv.Itoa(timeoutSeconds)+"s")
-	}
-	args = append(args, "--", "bash", "-lc", command)
-	return runExec(ctx, "", commandTimeout(timeoutSeconds), outputLimit(maxBytes), argv[0], args...)
-}
-
-func splitCommandLine(value string) ([]string, error) {
-	var args []string
-	var current strings.Builder
-	var quote rune
-	escaped := false
-	for _, r := range value {
-		switch {
-		case escaped:
-			current.WriteRune(r)
-			escaped = false
-		case r == '\\':
-			escaped = true
-		case quote != 0:
-			if r == quote {
-				quote = 0
-			} else {
-				current.WriteRune(r)
-			}
-		case r == '\'' || r == '"':
-			quote = r
-		case unicode.IsSpace(r):
-			if current.Len() > 0 {
-				args = append(args, current.String())
-				current.Reset()
-			}
-		default:
-			current.WriteRune(r)
-		}
-	}
-	if escaped {
-		current.WriteRune('\\')
-	}
-	if quote != 0 {
-		return nil, errors.New("unterminated quote in opensandbox cli")
-	}
-	if current.Len() > 0 {
-		args = append(args, current.String())
-	}
-	return args, nil
 }
 
 func runExec(ctx context.Context, cwd string, timeout time.Duration, maxBytes int, name string, args ...string) (string, error) {

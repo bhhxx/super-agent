@@ -7,12 +7,10 @@ import (
 	"os/exec"
 	"strings"
 
-	"super-agent/runtime"
+	runtime "super-agent/runtime/protocol"
 )
 
-type BashTool struct {
-	Config Config
-}
+type BashTool struct{}
 
 func (BashTool) Spec() runtime.ToolSpec {
 	return runtime.ToolSpec{
@@ -33,9 +31,6 @@ func (t BashTool) Run(ctx context.Context, call runtime.ToolCall) (string, error
 	command := bashCommand(call.Input)
 	if command == "" {
 		return "", errors.New("invalid bash command input: must be JSON with 'command' field")
-	}
-	if runner := openSandboxRunner(t.Config, "."); runner != nil {
-		return runner.Run(ctx, 0, defaultOutputBytes, command)
 	}
 	output, err := exec.CommandContext(ctx, "bash", "-lc", command).CombinedOutput()
 	if err == nil {

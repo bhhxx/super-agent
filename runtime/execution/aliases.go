@@ -2,34 +2,32 @@ package execution
 
 import (
 	"super-agent/runtime/machine"
-	"super-agent/runtime/model"
+	"super-agent/runtime/protocol"
 )
 
-type Message = model.Message
-type ToolCall = model.ToolCall
-type ToolCallBatch = model.ToolCallBatch
-type CommandClass = model.CommandClass
-type PermissionRequest = model.PermissionRequest
+type Message = protocol.Message
+type ToolCall = protocol.ToolCall
+type ToolCallBatch = machine.ToolCallBatch
+type CommandClass = machine.CommandClass
+type PermissionRequest = machine.PermissionRequest
 
 const (
-	CommandClassReadOnly    = model.CommandClassReadOnly
-	CommandClassWrite       = model.CommandClassWrite
-	CommandClassNetwork     = model.CommandClassNetwork
-	CommandClassDestructive = model.CommandClassDestructive
-	CommandClassUnknown     = model.CommandClassUnknown
+	CommandClassReadOnly    = machine.CommandClassReadOnly
+	CommandClassWrite       = machine.CommandClassWrite
+	CommandClassNetwork     = machine.CommandClassNetwork
+	CommandClassDestructive = machine.CommandClassDestructive
+	CommandClassUnknown     = machine.CommandClassUnknown
 )
 
-type ToolSpec = model.ToolSpec
-type ModelResponse = model.ModelResponse
-type StreamChunk = model.StreamChunk
-type Model = model.Model
-type ToolRunner = model.ToolRunner
+type ToolSpec = protocol.ToolSpec
+type ModelResponse = protocol.ModelResponse
+type StreamChunk = protocol.StreamChunk
+type Model = protocol.Model
+type ToolRunner = protocol.ToolRunner
 
 type Event = machine.Event
 type AssistantMessageReceived = machine.AssistantMessageReceived
-type ToolCallsReceived = machine.ToolCallsReceived
 type ToolBatchReceived = machine.ToolBatchReceived
-type ToolCallAvailable = machine.ToolCallAvailable
 type ToolBatchFinished = machine.ToolBatchFinished
 type ToolCallNeedsApproval = machine.ToolCallNeedsApproval
 type ToolCallReadyToRun = machine.ToolCallReadyToRun

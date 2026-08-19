@@ -4,22 +4,6 @@ type Mutation interface {
 	isMutation()
 }
 
-// AllMutations lists every Mutation type
-var AllMutations = []Mutation{
-	AppendUserMessage{},
-	AppendAssistantMessage{},
-	AppendToolResult{},
-	AppendStreamingAssistant{},
-	FlushStreamingAssistant{},
-	SetPendingTool{},
-	SetToolCallBatch{},
-	AdvanceToolCallBatch{},
-	ClearPendingTool{},
-	ClearPendingEffects{},
-	ClearToolCallBatch{},
-	ResetContext{},
-}
-
 type AppendUserMessage struct {
 	Content string
 }
@@ -73,6 +57,16 @@ type ClearPendingTool struct{}
 
 func (ClearPendingTool) isMutation() {}
 
+type SetCurrentTool struct {
+	Call ToolCall
+}
+
+func (SetCurrentTool) isMutation() {}
+
+type ClearCurrentTool struct{}
+
+func (ClearCurrentTool) isMutation() {}
+
 type ClearPendingEffects struct{}
 
 func (ClearPendingEffects) isMutation() {}
@@ -84,3 +78,21 @@ func (ClearToolCallBatch) isMutation() {}
 type ResetContext struct{}
 
 func (ResetContext) isMutation() {}
+
+// AllMutations lists every Mutation type for registration, serialization, and testing.
+var AllMutations = []Mutation{
+	AppendUserMessage{},
+	AppendAssistantMessage{},
+	AppendToolResult{},
+	AppendStreamingAssistant{},
+	FlushStreamingAssistant{},
+	SetPendingTool{},
+	SetToolCallBatch{},
+	AdvanceToolCallBatch{},
+	ClearPendingTool{},
+	SetCurrentTool{},
+	ClearCurrentTool{},
+	ClearPendingEffects{},
+	ClearToolCallBatch{},
+	ResetContext{},
+}

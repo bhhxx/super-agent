@@ -2,9 +2,7 @@ package tools_test
 
 import (
 	"context"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -50,68 +48,6 @@ func TestRunCommandRejectsCWDOutsideWorkspace(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "outside working directory") {
 		t.Fatalf("err = %v, want outside working directory", err)
-	}
-}
-
-func TestRunCommandUsesOpenSandboxBackendWhenConfigured(t *testing.T) {
-	dir := t.TempDir()
-	log := filepath.Join(dir, "args")
-	cli := filepath.Join(dir, "osb")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + log + "\nprintf sandbox-output\n"
-	if err := os.WriteFile(cli, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	tool := RunCommandTool{Config: Config{
-		OpenSandboxID:  "sbx-1",
-		OpenSandboxCLI: cli,
-		OpenSandboxCWD: "/workspace",
-	}}
-
-	out, err := tool.Run(context.Background(), runtime.ToolCall{Name: "run_command", Input: `{"command":"pwd","timeout_seconds":5}`})
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-	if out != "sandbox-output" {
-		t.Fatalf("out = %q, want sandbox-output", out)
-	}
-	args, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "command\nrun\nsbx-1\n-o\nraw\n--workdir\n/workspace\n--timeout\n5s\n--\nbash\n-lc\npwd\n"
-	if string(args) != want {
-		t.Fatalf("args = %q, want %q", string(args), want)
-	}
-}
-
-func TestRunCommandUsesOpenSandboxCLIArguments(t *testing.T) {
-	dir := t.TempDir()
-	log := filepath.Join(dir, "args")
-	uv := filepath.Join(dir, "uv")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + log + "\nprintf sandbox-output\n"
-	if err := os.WriteFile(uv, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	tool := RunCommandTool{Config: Config{
-		OpenSandboxID:  "sbx-1",
-		OpenSandboxCLI: uv + " --directory /home/bhhxx/OpenSandbox/cli run osb",
-		OpenSandboxCWD: "/workspace",
-	}}
-
-	out, err := tool.Run(context.Background(), runtime.ToolCall{Name: "run_command", Input: `{"command":"pwd","timeout_seconds":5}`})
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-	if out != "sandbox-output" {
-		t.Fatalf("out = %q, want sandbox-output", out)
-	}
-	args, err := os.ReadFile(log)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "--directory\n/home/bhhxx/OpenSandbox/cli\nrun\nosb\ncommand\nrun\nsbx-1\n-o\nraw\n--workdir\n/workspace\n--timeout\n5s\n--\nbash\n-lc\npwd\n"
-	if string(args) != want {
-		t.Fatalf("args = %q, want %q", string(args), want)
 	}
 }
 

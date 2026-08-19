@@ -358,8 +358,7 @@ func TestWaitingApprovalKeepsRunContext(t *testing.T) {
 	approvals := NewMemoryApprovalStore()
 	engine := NewEngineWithComponents(
 		NewDefaultEffectRunner(NewDefaultEffectExecutor(model, tools)),
-		DefaultResultResolver{},
-		NewDefaultEventClassifier(NewDefaultPolicy(), approvals),
+		NewDefaultOutcomeResolver(NewDefaultPolicy(), approvals),
 		DefaultReducer{},
 		runs,
 		approvals,
@@ -427,8 +426,7 @@ func TestFinalAssistantResponseFinishesRun(t *testing.T) {
 	approvals := NewMemoryApprovalStore()
 	engine := NewEngineWithComponents(
 		NewDefaultEffectRunner(NewDefaultEffectExecutor(model, &fakeTool{})),
-		DefaultResultResolver{},
-		NewDefaultEventClassifier(NewDefaultPolicy(), approvals),
+		NewDefaultOutcomeResolver(NewDefaultPolicy(), approvals),
 		DefaultReducer{},
 		runs,
 		approvals,
@@ -479,8 +477,7 @@ func TestApproveAlwaysWritesStoreWithoutHoldingEngineLock(t *testing.T) {
 	store := newBlockingApprovalStore()
 	engine := NewEngineWithComponents(
 		NewDefaultEffectRunner(NewDefaultEffectExecutor(model, tools)),
-		DefaultResultResolver{},
-		NewDefaultEventClassifier(NewDefaultPolicy(), store),
+		NewDefaultOutcomeResolver(NewDefaultPolicy(), store),
 		DefaultReducer{},
 		NewDefaultRunController(),
 		store,
@@ -782,7 +779,8 @@ func TestToolRiskComesFromToolSpec(t *testing.T) {
 }
 
 func TestTransitionProducesMutationsAndEffects(t *testing.T) {
-	decision, err := Transition(StateIdle, UserMessageSubmitted{Content: "hi"})
+	event := UserMessageSubmitted{Content: "hi"}
+	decision, err := Transition(transitionSnapshot(StateIdle, event), event)
 	if err != nil {
 		t.Fatalf("Transition failed: %v", err)
 	}
@@ -805,18 +803,19 @@ func TestTransitionProducesMutationsAndEffects(t *testing.T) {
 
 func TestApprovalGrantedRunsPendingLocalTool(t *testing.T) {
 	call := ToolCall{ID: "call-1", Name: "bash", Input: "pwd"}
-	decision, err := Transition(StateWaitingApproval, ApprovalGranted{Call: call})
+	event := ApprovalGranted{Call: call}
+	decision, err := Transition(transitionSnapshot(StateWaitingApproval, event), event)
 	if err != nil {
 		t.Fatalf("Transition failed: %v", err)
 	}
 	if decision.NextState != StateRunningTool {
 		t.Fatalf("next state = %s, want %s", decision.NextState, StateRunningTool)
 	}
-	if len(decision.Mutations) != 1 {
-		t.Fatalf("mutations = %+v, want one", decision.Mutations)
+	if len(decision.Mutations) != 2 {
+		t.Fatalf("mutations = %+v, want two", decision.Mutations)
 	}
-	if _, ok := decision.Mutations[0].(ClearPendingTool); !ok {
-		t.Fatalf("mutation = %T, want ClearPendingTool", decision.Mutations[0])
+	if _, ok := decision.Mutations[0].(SetCurrentTool); !ok {
+		t.Fatalf("mutation = %T, want SetCurrentTool", decision.Mutations[0])
 	}
 	if len(decision.Effects) != 1 {
 		t.Fatalf("effects = %+v, want one", decision.Effects)
@@ -831,7 +830,8 @@ func TestApprovalGrantedRunsPendingLocalTool(t *testing.T) {
 }
 func TestToolResultAdvancesQueueThroughEngine(t *testing.T) {
 	call := ToolCall{ID: "call-1", Name: "bash", Input: "pwd"}
-	decision, err := Transition(StateRunningTool, ToolResultReceived{Call: call, Result: "ok"})
+	event := ToolResultReceived{Call: call, Result: "ok"}
+	decision, err := Transition(transitionSnapshot(StateRunningTool, event), event)
 	if err != nil {
 		t.Fatalf("Transition failed: %v", err)
 	}
@@ -848,7 +848,8 @@ func TestToolResultAdvancesQueueThroughEngine(t *testing.T) {
 
 func TestDenialAdvancesQueueThroughEngine(t *testing.T) {
 	call := ToolCall{ID: "call-1", Name: "bash", Input: "rm -rf /"}
-	decision, err := Transition(StateWaitingApproval, ApprovalDenied{Call: call})
+	event := ApprovalDenied{Call: call}
+	decision, err := Transition(transitionSnapshot(StateWaitingApproval, event), event)
 	if err != nil {
 		t.Fatalf("Transition failed: %v", err)
 	}
@@ -864,7 +865,8 @@ func TestDenialAdvancesQueueThroughEngine(t *testing.T) {
 }
 
 func TestCancelRequestedReturnsRuntimeToIdle(t *testing.T) {
-	decision, err := Transition(StateWaitingLLM, CancelRequested{})
+	event := CancelRequested{}
+	decision, err := Transition(transitionSnapshot(StateWaitingLLM, event), event)
 	if err != nil {
 		t.Fatalf("Transition failed: %v", err)
 	}
@@ -1130,6 +1132,48 @@ func TestSessionRunReturnsErrorWhenApprovalChannelCloses(t *testing.T) {
 	if len(tools.calls) != 0 {
 		t.Fatalf("tool calls = %+v, want none", tools.calls)
 	}
+}
+
+func TestSessionEmitsAdvancingQueueBetweenToolCalls(t *testing.T) {
+	model := &scriptedModel{responses: []ModelResponse{
+		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
+		{Content: "done"},
+	}}
+	tools := &fakeTool{
+		results: map[string]string{"bash": "ok"},
+		specs:   []ToolSpec{{Name: "bash", Risky: true}},
+	}
+	engine := NewEngine(model, tools, nil)
+	if err := engine.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	session := NewSession(engine)
+	events := make(chan SessionEvent, 64)
+	approvals := make(chan ApprovalDecision, 1)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.RunTurn(context.Background(), "run bash", events, approvals)
+	}()
+
+	var states []State
+	for ev := range events {
+		if stateChanged, ok := ev.(StateChanged); ok {
+			states = append(states, stateChanged.State)
+		}
+		if _, ok := ev.(ToolApprovalRequested); ok {
+			approvals <- ApproveOnce
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	for _, state := range states {
+		if state == StateAdvancingQueue {
+			return
+		}
+	}
+	t.Fatalf("states = %v, want AdvancingQueue emitted while the tool batch advances", states)
 }
 
 func TestApproveAlwaysIsScopedToToolNameAndInput(t *testing.T) {
@@ -1405,8 +1449,7 @@ func TestClassifierToolSpecsAreFetchedWithoutHoldingEngineLock(t *testing.T) {
 	store := NewMemoryApprovalStore()
 	engine := NewEngineWithComponents(
 		runner,
-		DefaultResultResolver{},
-		NewDefaultEventClassifier(NewDefaultPolicy(), store),
+		NewDefaultOutcomeResolver(NewDefaultPolicy(), store),
 		DefaultReducer{},
 		NewDefaultRunController(),
 		store,

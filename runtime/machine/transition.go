@@ -1,15 +1,9 @@
 package machine
 
-import "errors"
-
 type TransitionResult struct {
 	NextState State
 	Mutations []Mutation
 	Effects   []Effect
-}
-
-func toolCallKey(call ToolCall) string {
-	return call.Name + "\x00" + call.Input
 }
 
 func toolBatchID(calls []ToolCall) string {
@@ -35,11 +29,18 @@ func runtimeErrorMessage(err error) string {
 	return err.Error()
 }
 
-func Transition(state State, event Event) (TransitionResult, error) {
+func Transition(snapshot MachineSnapshot, event Event) (TransitionResult, error) {
+	state := snapshot.state
+	unexpected := func() (TransitionResult, error) {
+		return TransitionResult{}, UnexpectedEventError{State: state, Event: event}
+	}
+	protocolViolation := func(reason string) (TransitionResult, error) {
+		return TransitionResult{}, ProtocolViolationError{State: state, Event: event, Reason: reason}
+	}
 	switch ev := event.(type) {
 	case UserMessageSubmitted:
 		if state != StateIdle {
-			return TransitionResult{}, errors.New("runtime is not idle")
+			return unexpected()
 		}
 		return TransitionResult{
 			NextState: StateWaitingLLM,
@@ -48,7 +49,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		}, nil
 	case AssistantMessageReceived:
 		if state != StateWaitingLLM {
-			return TransitionResult{}, errors.New("runtime is not waiting for llm")
+			return unexpected()
 		}
 		return TransitionResult{
 			NextState: StateIdle,
@@ -60,10 +61,10 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		}, nil
 	case ToolBatchReceived:
 		if state != StateWaitingLLM {
-			return TransitionResult{}, errors.New("runtime is not waiting for llm")
+			return unexpected()
 		}
 		if len(ev.Calls) == 0 {
-			return TransitionResult{}, errors.New("empty tool calls")
+			return protocolViolation("tool batch is empty")
 		}
 		return TransitionResult{
 			NextState: StateAdvancingQueue,
@@ -80,25 +81,43 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		}, nil
 	case ApprovalGranted:
 		if state != StateWaitingApproval {
-			return TransitionResult{}, errors.New("no tool is waiting for approval")
+			return unexpected()
+		}
+		if snapshot.pendingTool == nil {
+			return protocolViolation("approval has no pending tool")
+		}
+		if !sameToolCall(ev.Call, *snapshot.pendingTool) {
+			return protocolViolation("approved call does not match pending tool")
 		}
 		return TransitionResult{
 			NextState: StateRunningTool,
-			Mutations: []Mutation{ClearPendingTool{}},
+			Mutations: []Mutation{SetCurrentTool{Call: ev.Call}, ClearPendingTool{}},
 			Effects:   []Effect{RunTool{Call: ev.Call}},
 		}, nil
 	case ApprovalAlwaysGranted:
 		if state != StateWaitingApproval {
-			return TransitionResult{}, errors.New("no tool is waiting for approval")
+			return unexpected()
+		}
+		if snapshot.pendingTool == nil {
+			return protocolViolation("approval has no pending tool")
+		}
+		if !sameToolCall(ev.Call, *snapshot.pendingTool) {
+			return protocolViolation("approved call does not match pending tool")
 		}
 		return TransitionResult{
 			NextState: StateRunningTool,
-			Mutations: []Mutation{ClearPendingTool{}},
+			Mutations: []Mutation{SetCurrentTool{Call: ev.Call}, ClearPendingTool{}},
 			Effects:   []Effect{RunTool{Call: ev.Call}},
 		}, nil
 	case ApprovalDenied:
 		if state != StateWaitingApproval {
-			return TransitionResult{}, errors.New("no tool is waiting for approval")
+			return unexpected()
+		}
+		if snapshot.pendingTool == nil {
+			return protocolViolation("denial has no pending tool")
+		}
+		if !sameToolCall(ev.Call, *snapshot.pendingTool) {
+			return protocolViolation("denied call does not match pending tool")
 		}
 		return TransitionResult{
 			NextState: StateAdvancingQueue,
@@ -110,18 +129,28 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		}, nil
 	case ToolResultReceived:
 		if state != StateRunningTool {
-			return TransitionResult{}, errors.New("runtime is not waiting for tool result")
+			return unexpected()
+		}
+		if snapshot.currentTool == nil {
+			return protocolViolation("tool result has no current tool")
+		}
+		if !sameToolCall(ev.Call, *snapshot.currentTool) {
+			return protocolViolation("result call does not match current tool")
 		}
 		return TransitionResult{
 			NextState: StateAdvancingQueue,
 			Mutations: []Mutation{
 				AppendToolResult{Call: ev.Call, Result: ev.Result},
+				ClearCurrentTool{},
 			},
 			Effects: []Effect{ProcessNextToolCall{}},
 		}, nil
 	case ToolBatchFinished:
 		if state != StateAdvancingQueue {
-			return TransitionResult{}, errors.New("invalid state for no more tool calls")
+			return unexpected()
+		}
+		if !snapshot.queue.empty() {
+			return protocolViolation("tool batch finished before the queue was empty")
 		}
 		return TransitionResult{
 			NextState: StateWaitingLLM,
@@ -130,7 +159,13 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		}, nil
 	case ToolCallNeedsApproval:
 		if state != StateAdvancingQueue {
-			return TransitionResult{}, errors.New("invalid state for next tool call")
+			return unexpected()
+		}
+		if snapshot.queue.next == nil {
+			return protocolViolation("approval requested with no next tool")
+		}
+		if !sameToolCall(ev.Call, *snapshot.queue.next) {
+			return protocolViolation("approval call does not match next tool")
 		}
 		return TransitionResult{
 			NextState: StateWaitingApproval,
@@ -141,11 +176,17 @@ func Transition(state State, event Event) (TransitionResult, error) {
 		}, nil
 	case ToolCallReadyToRun:
 		if state != StateAdvancingQueue {
-			return TransitionResult{}, errors.New("invalid state for next tool call")
+			return unexpected()
+		}
+		if snapshot.queue.next == nil {
+			return protocolViolation("ready call has no next tool")
+		}
+		if !sameToolCall(ev.Call, *snapshot.queue.next) {
+			return protocolViolation("ready call does not match next tool")
 		}
 		return TransitionResult{
 			NextState: StateRunningTool,
-			Mutations: []Mutation{AdvanceToolCallBatch{}},
+			Mutations: []Mutation{AdvanceToolCallBatch{}, SetCurrentTool{Call: ev.Call}},
 			Effects:   []Effect{RunTool{Call: ev.Call}},
 		}, nil
 	case ErrorOccurred:
@@ -158,6 +199,7 @@ func Transition(state State, event Event) (TransitionResult, error) {
 					Result: runtimeErrorMessage(ev.Err),
 				},
 				ClearPendingTool{},
+				ClearCurrentTool{},
 				ClearToolCallBatch{},
 				ClearPendingEffects{},
 			},
@@ -168,18 +210,19 @@ func Transition(state State, event Event) (TransitionResult, error) {
 			Mutations: []Mutation{
 				FlushStreamingAssistant{Interrupted: true},
 				ClearPendingTool{},
+				ClearCurrentTool{},
 				ClearToolCallBatch{},
 				ClearPendingEffects{},
 			},
 		}, nil
 	case EngineReady:
 		if state != StateInitializing {
-			return TransitionResult{}, errors.New("runtime is not initializing")
+			return unexpected()
 		}
 		return TransitionResult{NextState: StateIdle}, nil
 	case ResetRequested:
 		return TransitionResult{NextState: StateIdle, Mutations: []Mutation{ResetContext{}}}, nil
 	default:
-		return TransitionResult{}, errors.New("unknown event")
+		return unexpected()
 	}
 }

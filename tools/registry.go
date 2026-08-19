@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"super-agent/runtime"
+	runtime "super-agent/runtime/protocol"
 )
 
 type Tool interface {
@@ -12,16 +12,10 @@ type Tool interface {
 	Run(ctx context.Context, call runtime.ToolCall) (string, error)
 }
 
-type Config struct {
-	OpenSandboxID  string
-	OpenSandboxCLI string
-	OpenSandboxCWD string
-}
-
 type Registry struct {
 	order      []string
 	tools      map[string]Tool
-	checkpoint func(runtime.ToolCall)
+	checkpoint func(runtime.ToolCall) error
 }
 
 func NewRegistry(items ...Tool) *Registry {
@@ -36,21 +30,8 @@ func NewRegistry(items ...Tool) *Registry {
 	return registry
 }
 
-func (r *Registry) SetCheckpointCallback(callback func(runtime.ToolCall)) {
+func (r *Registry) SetCheckpointCallback(callback func(runtime.ToolCall) error) {
 	r.checkpoint = callback
-}
-
-func (r *Registry) Configure(cfg Config) {
-	for name, tool := range r.tools {
-		switch t := tool.(type) {
-		case RunCommandTool:
-			t.Config = cfg
-			r.tools[name] = t
-		case BashTool:
-			t.Config = cfg
-			r.tools[name] = t
-		}
-	}
 }
 
 func DefaultRegistry() *Registry {
@@ -83,7 +64,9 @@ func (r *Registry) Run(ctx context.Context, call runtime.ToolCall) (string, erro
 		return "", errors.New("unknown tool: " + call.Name)
 	}
 	if tool.Spec().Risky && r.checkpoint != nil {
-		r.checkpoint(call)
+		if err := r.checkpoint(call); err != nil {
+			return "", err
+		}
 	}
 	return tool.Run(ctx, call)
 }

@@ -1,30 +1,30 @@
 package machine
 
-import "super-agent/runtime/model"
-
-type State = model.State
-
-const (
-	StateInitializing    = model.StateInitializing
-	StateIdle            = model.StateIdle
-	StateWaitingLLM      = model.StateWaitingLLM
-	StateWaitingApproval = model.StateWaitingApproval
-	StateRunningTool     = model.StateRunningTool
-	StateAdvancingQueue  = model.StateAdvancingQueue
+import (
+	"super-agent/runtime/permission"
+	"super-agent/runtime/protocol"
 )
 
-type Role = model.Role
+type Role = protocol.Role
 
 const (
-	RoleSystem    = model.RoleSystem
-	RoleUser      = model.RoleUser
-	RoleAssistant = model.RoleAssistant
-	RoleTool      = model.RoleTool
+	RoleSystem    = protocol.RoleSystem
+	RoleUser      = protocol.RoleUser
+	RoleAssistant = protocol.RoleAssistant
+	RoleTool      = protocol.RoleTool
 )
 
-type Message = model.Message
-type ToolCall = model.ToolCall
-type ToolCallBatch = model.ToolCallBatch
-type PermissionRequest = model.PermissionRequest
-type ModelResponse = model.ModelResponse
-type StreamChunk = model.StreamChunk
+type Message = protocol.Message
+type ToolCall = protocol.ToolCall
+type ModelResponse = protocol.ModelResponse
+type StreamChunk = protocol.StreamChunk
+type CommandClass = permission.CommandClass
+type PermissionRequest = permission.Request
+
+const (
+	CommandClassReadOnly    = permission.CommandClassReadOnly
+	CommandClassWrite       = permission.CommandClassWrite
+	CommandClassNetwork     = permission.CommandClassNetwork
+	CommandClassDestructive = permission.CommandClassDestructive
+	CommandClassUnknown     = permission.CommandClassUnknown
+)

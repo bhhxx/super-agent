@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"super-agent/runtime"
+	runtime "super-agent/runtime/protocol"
 )
 
 const maxToolOutputLines = 200

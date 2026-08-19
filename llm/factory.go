@@ -2,7 +2,7 @@ package llm
 
 import (
 	"errors"
-	"super-agent/runtime"
+	runtime "super-agent/runtime/protocol"
 )
 
 type Config struct {

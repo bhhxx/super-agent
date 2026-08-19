@@ -71,13 +71,13 @@ func TestLoadStartsAtGitRoot(t *testing.T) {
 	}
 }
 
-func TestLoadIncludesUserMemoryBeforeProjectInstructions(t *testing.T) {
+func TestLoadIncludesUserSpecBeforeProjectInstructions(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	if err := os.MkdirAll(filepath.Join(home, ".superagent"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".superagent", "AGENTS.md"), []byte("user memory"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".superagent", "AGENTS.md"), []byte("user spec"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	project := t.TempDir()
@@ -89,10 +89,10 @@ func TestLoadIncludesUserMemoryBeforeProjectInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.Content != "user memory\n\nproject rules" {
+	if bundle.Content != "user spec\n\nproject rules" {
 		t.Fatalf("content = %q", bundle.Content)
 	}
-	if len(bundle.Sources) != 2 || bundle.Sources[0].Kind != "user-memory" || bundle.Sources[1].Kind != "project" {
+	if len(bundle.Sources) != 2 || bundle.Sources[0].Kind != "user-spec" || bundle.Sources[1].Kind != "project" {
 		t.Fatalf("sources = %+v", bundle.Sources)
 	}
 }
@@ -183,5 +183,24 @@ func TestNewSessionInjectsSystemPrompt(t *testing.T) {
 	}
 	if messages[0].Content == "# Rules\n\n- keep tests focused" {
 		t.Fatal("system prompt came from a project file, want built-in prompt")
+	}
+}
+
+func TestLoadEmptyAgentsFallsBackToClaudeMd(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("   \n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# Project Guidance\n\nrules from claude"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	bundle, err := instructions.Load(dir)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !strings.Contains(bundle.Content, "rules from claude") {
+		t.Fatalf("bundle = %+v, want CLAUDE.md fallback content", bundle)
 	}
 }

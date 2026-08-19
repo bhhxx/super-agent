@@ -5,26 +5,6 @@ type Event interface {
 	isEvent()
 }
 
-// AllEvents lists every Event type for registration, serialization, and testing.
-var AllEvents = []Event{
-	UserMessageSubmitted{},
-	AssistantMessageReceived{},
-	ToolCallsReceived{},
-	ToolBatchReceived{},
-	ToolCallAvailable{},
-	ToolCallNeedsApproval{},
-	ToolCallReadyToRun{},
-	ToolBatchFinished{},
-	ToolResultReceived{},
-	ApprovalGranted{},
-	ApprovalAlwaysGranted{},
-	ApprovalDenied{},
-	ErrorOccurred{},
-	CancelRequested{},
-	ResetRequested{},
-	EngineReady{},
-}
-
 type UserMessageSubmitted struct {
 	Content string
 }
@@ -37,14 +17,6 @@ type AssistantMessageReceived struct {
 
 func (AssistantMessageReceived) isEvent() {}
 
-type ToolCallsReceived struct {
-	Content          string
-	Calls            []ToolCall
-	ReasoningContent string
-}
-
-func (ToolCallsReceived) isEvent() {}
-
 type ToolBatchReceived struct {
 	Content          string
 	Calls            []ToolCall
@@ -52,12 +24,6 @@ type ToolBatchReceived struct {
 }
 
 func (ToolBatchReceived) isEvent() {}
-
-type ToolCallAvailable struct {
-	Call ToolCall
-}
-
-func (ToolCallAvailable) isEvent() {}
 
 type ToolCallNeedsApproval struct {
 	Call    ToolCall
@@ -118,3 +84,21 @@ func (ResetRequested) isEvent() {}
 type EngineReady struct{}
 
 func (EngineReady) isEvent() {}
+
+// AllEvents lists every Event type for registration, serialization, and testing.
+var AllEvents = []Event{
+	UserMessageSubmitted{},
+	AssistantMessageReceived{},
+	ToolBatchReceived{},
+	ToolCallNeedsApproval{},
+	ToolCallReadyToRun{},
+	ToolBatchFinished{},
+	ToolResultReceived{},
+	ApprovalGranted{},
+	ApprovalAlwaysGranted{},
+	ApprovalDenied{},
+	ErrorOccurred{},
+	CancelRequested{},
+	ResetRequested{},
+	EngineReady{},
+}
