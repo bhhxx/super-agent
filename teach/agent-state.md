@@ -15,7 +15,7 @@
   - 状态开始：初始化完成、模型直接回复、取消、重置或发生错误
   - 状态结束：收到 `UserMessageSubmitted`
 
-- `RunningModel`：模型正在生成响应，包括流式输出
+- `WaitingLLM`：模型正在处理请求，包括流式输出
   - 状态开始：提交用户消息，或工具批次执行完毕
   - 状态结束：收到模型回复、工具调用批次、取消或错误
 
@@ -38,7 +38,7 @@
 - `ResetRequested`：进入 `Idle`，重置对话上下文
 
 
-下面这个图展示了不同状态之间的流转
+下面这个图展示了不同状态之间的流转，关于状态流转的函数是 `Transition`，位于 `super-agent/runtime/machine/transition.go`
 ```mermaid
 stateDiagram
     [*] --> Initializing
@@ -137,3 +137,187 @@ Idle + UserMessageSubmitted → WaitingLLM
 - 尚未处理完的工具调用批次。
 
 因此，`Idle` 是一次 agent 工作循环的起点，也是正常完成、取消、错误或重置后的落点。
+
+## 第三个状态：`WaitingLLM`
+
+`WaitingLLM` 表示模型调用正在进行。它覆盖等待首个响应、接收流式内容以及等待最终结果的整个过程。
+
+```go
+StateWaitingLLM State = "WaitingLLM"
+```
+
+### 进入条件
+
+- `Idle` 收到 `UserMessageSubmitted`。
+- `AdvancingQueue` 收到 `ToolBatchFinished`。
+
+```text
+Idle + UserMessageSubmitted          → WaitingLLM
+AdvancingQueue + ToolBatchFinished   → WaitingLLM
+```
+
+两条转移都会产生 `CallModel` Effect。区别是第一次把用户消息交给模型，第二次把工具结果交回模型继续推理。
+
+### 流式输出
+
+模型返回的流式片段通过 `AppendStreamingAssistant` Mutation 累积。流式内容只能存在于 `WaitingLLM`。
+
+流式片段不会结束当前状态，只有最终模型结果才会触发下一次状态转移。
+
+### 离开条件
+
+- 返回普通回复：收到 `AssistantMessageReceived`，进入 `Idle`。
+- 返回工具调用：收到 `ToolBatchReceived`，进入 `AdvancingQueue`。
+- 取消或错误：进入 `Idle`。
+
+```text
+WaitingLLM + AssistantMessageReceived → Idle
+WaitingLLM + ToolBatchReceived         → AdvancingQueue
+WaitingLLM + CancelRequested           → Idle
+WaitingLLM + ErrorOccurred             → Idle
+```
+
+收到 `ToolBatchReceived` 时，状态机会保存 assistant 消息、建立工具调用批次，并产生 `ProcessNextToolCall` Effect。
+
+## 第四个状态：`AdvancingQueue`
+
+`AdvancingQueue` 表示状态机正在推进工具调用批次，决定下一项工具应该等待审批、直接执行，还是结束整个批次。
+
+```go
+StateAdvancingQueue State = "AdvancingQueue"
+```
+
+这是一个调度状态，不负责实际执行工具。
+
+### 进入条件
+
+- 模型返回工具调用批次。
+- 一个工具执行完成。
+- 一个工具调用被拒绝。
+
+```text
+WaitingLLM + ToolBatchReceived         → AdvancingQueue
+RunningTool + ToolResultReceived       → AdvancingQueue
+WaitingApproval + ApprovalDenied       → AdvancingQueue
+```
+
+进入后通常会产生 `ProcessNextToolCall` Effect。
+
+### 离开条件
+
+- 下一项需要审批：进入 `WaitingApproval`。
+- 下一项可直接执行：进入 `RunningTool`。
+- 工具批次已经处理完：进入 `WaitingLLM`，再次调用模型。
+- 取消或错误：进入 `Idle`。
+
+```text
+AdvancingQueue + ToolCallNeedsApproval → WaitingApproval
+AdvancingQueue + ToolCallReadyToRun    → RunningTool
+AdvancingQueue + ToolBatchFinished     → WaitingLLM
+AdvancingQueue + CancelRequested       → Idle
+AdvancingQueue + ErrorOccurred         → Idle
+```
+
+### 状态约束
+
+处于 `AdvancingQueue` 时：
+
+- 必须存在工具调用批次。
+- 不应存在待审批工具。
+- 不应存在当前执行工具。
+- 批次索引必须处于合法范围。
+
+## 第五个状态：`WaitingApproval`
+
+`WaitingApproval` 表示下一项工具调用存在风险，需要等待用户决定。
+
+```go
+StateWaitingApproval State = "WaitingApproval"
+```
+
+### 进入条件
+
+`AdvancingQueue` 收到 `ToolCallNeedsApproval`：
+
+```text
+AdvancingQueue + ToolCallNeedsApproval → WaitingApproval
+```
+
+该转移会：
+
+1. 保存待审批工具与权限请求。
+2. 推进工具批次索引。
+3. 暂停 Effect 调度，等待用户输入。
+
+### 离开条件
+
+- 单次允许：进入 `RunningTool`。
+- 始终允许：记录授权并进入 `RunningTool`。
+- 拒绝：追加拒绝结果并回到 `AdvancingQueue`。
+- 取消或错误：进入 `Idle`。
+
+```text
+WaitingApproval + ApprovalGranted       → RunningTool
+WaitingApproval + ApprovalAlwaysGranted → RunningTool
+WaitingApproval + ApprovalDenied        → AdvancingQueue
+WaitingApproval + CancelRequested       → Idle
+WaitingApproval + ErrorOccurred         → Idle
+```
+
+### 状态约束
+
+处于 `WaitingApproval` 时，必须同时存在：
+
+- 工具调用批次。
+- 待审批工具。
+- 对应的权限请求。
+
+待审批工具必须与工具批次中刚刚推进的调用一致。
+
+## 第六个状态：`RunningTool`
+
+`RunningTool` 表示一个工具调用正在执行。
+
+```go
+StateRunningTool State = "RunningTool"
+```
+
+### 进入条件
+
+- 工具无需审批，可以直接执行。
+- 用户批准当前工具调用。
+- 用户批准并将当前工具加入长期允许列表。
+
+```text
+AdvancingQueue + ToolCallReadyToRun       → RunningTool
+WaitingApproval + ApprovalGranted         → RunningTool
+WaitingApproval + ApprovalAlwaysGranted   → RunningTool
+```
+
+进入该状态时，状态机会保存当前工具，并产生 `RunTool` Effect。
+
+### 离开条件
+
+- 工具返回结果：进入 `AdvancingQueue`，继续处理批次。
+- 取消或错误：进入 `Idle`。
+
+```text
+RunningTool + ToolResultReceived → AdvancingQueue
+RunningTool + CancelRequested    → Idle
+RunningTool + ErrorOccurred      → Idle
+```
+
+收到工具结果时，状态机会：
+
+1. 通过 `AppendToolResult` 保存结果。
+2. 清除当前工具。
+3. 产生 `ProcessNextToolCall` Effect。
+
+### 状态约束
+
+处于 `RunningTool` 时：
+
+- 必须存在工具调用批次。
+- 必须存在当前执行工具。
+- 当前工具必须与批次中刚刚推进的调用一致。
+- 不应同时存在待审批工具或权限请求。
