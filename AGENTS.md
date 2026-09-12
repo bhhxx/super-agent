@@ -1,11 +1,13 @@
 # Repository Guidelines
 
+Development rules for this repository. User-facing usage, command reference, and behaviour
+specifications live in `docs/` — see the index at `docs/README.md`.
+
 ## Essentials
 
 - Go project: agent runtime, LLM adapters, local tools, Bubble Tea TUI.
 - Design pattern: hexagonal architecture with a functional core and imperative shell. `runtime/machine` is the pure domain core; engine, session, TUI, LLM, tools, and store are ports or adapters around it.
 - State-machine flow is `Event -> validated MachineSnapshot -> Transition -> RuntimeDataChange + ActionPlan -> transactional RuntimeDataChangeApplier/Executor -> ActionResultResolver -> Event`; dependencies point toward the machine.
-- `State` is the current execution state. `RuntimeData` is the complete mutable machine data. A `RuntimeDataChange` constructs the next runtime data; an `ActionPlan` atomically clears obsolete queued work and schedules actions that run only after commit.
 - Keep `RunID` stale filtering in the engine. Keep state, call-id, queue guards, and invariants in `runtime/machine`.
 - RuntimeDataChangeAppliers must clone, apply, and validate runtime data; the engine commits runtime data and the transition's action plan under one lock only after validation.
 - The engine owns the single agent loop and notifies a per-turn state observer after state-changing transitions; the session supplies approval, streaming, notification, and persistence ports without scheduling actions.
@@ -32,42 +34,20 @@
 - LLM and tool adapters may import `runtime/protocol`, not the root `runtime` facade.
 - MCP stdio adapters live in `tools/mcp`; discovered tools join `tools.Registry` atomically and remain risky under the common permission policy.
 - `app.MCPController` coordinates MCP lifecycle, dynamic registry changes, and atomic settings persistence; TUI only calls its application-facing adapter.
-- More detail: `docs/repository-details.md`.
-- Transition teaching guide: `teach/agent-transition.md`.
-- Agent-loop teaching guide: `teach/agent-loop.md`.
-- State, context, and worked-transition guides: `teach/agent-state.md`, `teach/agent-memory.md`, `teach/agent-transition-example.md`.
 
 ## Documentation
 
-- At the end of each work session, proactively update `AGENTS.md`.
-- Keep `AGENTS.md` aligned with current architecture, commands, tests, and security rules.
-- Update `docs/repository-details.md` when architecture or runtime flow changes.
+- Documentation is the specification for the code, not a description of it. Change the relevant `docs/` file first, then the code, and ship both in the same change.
+- A behaviour change that `docs/` does not reflect is incomplete, even when the code works.
+- When code and a document disagree, the code is wrong until the document is deliberately amended.
+- Every normative fact has exactly one home in `docs/`; link to it rather than restating it. Duplicated facts drift, and prior duplicates in this repository had already diverged.
+- `docs/README.md` indexes the document set; `docs/contributing.md` covers the workflow, tests, and git conventions.
+- `tests/architecture/spec_test.go` enforces `docs/machine.md` against the real transition graph; `tests/architecture/dependencies_test.go` enforces the dependency rule.
+- Keep `AGENTS.md` to development rules. Usage, command reference, keybindings, and behaviour specs belong in `docs/`, not here.
 
 ## Commands
 
-- `go run .`: run TUI.
-- `go run . --no-tools`: run without tools.
-- `go run . --yolo`: auto-approve tools.
-- `go run . --approval-mode <ask|accept-edits|plan|bypass>`: set permission mode.
-- TUI session commands: `/instructions`, `/permissions`, `/permissions mode <mode>`, `/mcp list`, `/mcp add <name> <command> [args...]`, `/mcp remove <name>`, `/mcp restart <name>`, `/sessions`, `/resume <id>`, `/rename <id> <title>`, `/delete-session <id>`, `/fork [title]`, `/memory`, `/remember <text>`, `/forget`, `/attach <path>`, `/attachments`, `/compact`, `/undo`.
-- Agent commands: `/agent`, `/agent <name>`, `/plan`, `/build`, and `/mode <plan|build>`; custom profiles can restrict tools and live under `agents` in settings.
-- The `delegate` tool creates persistent child sessions; cancellation follows the parent context, and optional worktrees live under `.super-agent/worktrees/`.
-- `/fork [title]` branches the transcript; `/memory`, `/remember <text>`, and `/forget` manage cross-session memory.
-- Workflow commands: `/review`, `/diff`, `/fix-ci`, `/branch`, `/commit-message`, and `/diagnostics <path>`.
-- Extension commands: `/commands`, `/skills`, and `/plugins`; discovery uses user/project `.superagent` directories.
-- `/export <markdown|json>` and `/share` write local files under `.super-agent/exports/`.
-- `/attach <path>` queues a bounded workspace attachment for the next turn; `/attachments` lists the queue.
-- While a turn runs, `Enter` cancels and steers with the new prompt; `Tab` queues a follow-up. Queued prompts run in order.
-- The footer previews the first three queued prompts and the remaining count.
-- The footer shows a `states:` history of the current turn's state transitions (for example `WaitingLLM → AdvancingQueue → RunningTool`); consecutive repeats collapse and the history resets when a new turn starts.
-- Manual run cancellation clears queued prompts; steering cancellation preserves them.
-- Below 18 terminal rows, use compact footer rendering and keep viewport/input dimensions positive.
-- Keep long command output in the scrollable viewport and bound footer status height.
-- Approval UI supports arrows/Enter plus `1/y`, `2/a`, and `3/n`; ignore duplicate input after submission.
-- The composer is multiline: `Ctrl+J`, `Shift+Enter`, or `Alt+Enter` inserts a newline; `Enter` submits.
-- Typing `/` opens the command palette; arrows select and `Tab` or `Enter` completes commands.
-- The full command palette shows descriptions and argument hints; compact mode shows names only.
-- Prompt-history navigation preserves and restores the current unsubmitted draft.
+- `go run .`: run the TUI. Flags are listed in `README.md`.
 - `go test ./...`: run all tests.
 - `gofmt -w <files>`: format changed Go files.
 - `./scripts/coverage.sh`: run external tests with whole-project coverage.
@@ -83,20 +63,17 @@
 - Runtime changes should cover transitions and observable engine behavior when practical.
 - Transition tests should assert complete runtime-data-change/action-queue-change/scheduled-action order.
 - Reset tests should prove system messages are preserved.
+- Tests that parse documents or source must fail loudly when the format changes rather than silently matching nothing.
 - GitHub Actions runs `./scripts/verify.sh` for pushes and pull requests.
 
 ## Security
 
 - Do not commit secrets.
-- Runtime switches come from `.env` and environment variables.
-- `YOLO=true` in `.env` enables bypass only when no explicit `--approval-mode` flag was passed; the flag always wins over the environment.
-- LLM provider config comes from `~/.superagent/settings.json`.
-- Permission mode and allow/deny rules come from `~/.superagent/settings.json`.
-- MCP stdio server definitions come from the top-level `mcp_servers` settings map.
-- LSP stdio server definitions come from `lsp_servers`; configured servers expose diagnostics, symbols, definitions, references, and outlines as tools.
-- Extensions configure custom commands, lifecycle hooks, skills, and local plugin manifests; tool hooks must use recursion-safe direct execution.
-- Structured JSONL telemetry correlates run/action IDs, transitions, tools, durations, errors, and token estimates.
-- `web_search` and `browser_fetch` are risky network tools; browser fetch blocks local/private targets and enforces redirect, timeout, and response limits.
+- `YOLO=true` in `.env` enables bypass only when no explicit `--approval-mode` flag was passed; the flag always wins over the environment, so a checked-in `.env` cannot silently disable permission prompts.
 - Command classification routes approvals but is not a security boundary.
-- Linux command tools use strict bubblewrap isolation by default with a read-only host root, writable workspace, policy-controlled networking, ephemeral home/tmp, and `prlimit` resource bounds.
-- Strict sandbox mode fails closed when `bwrap` or `prlimit` is unavailable; unsupported platforms require explicit `sandbox.mode: off`.
+- Linux command tools use strict bubblewrap isolation by default with a read-only host root, a writable workspace, policy-controlled networking, ephemeral home/tmp, and `prlimit` resource bounds.
+- Strict sandbox mode fails closed when `bwrap` or `prlimit` is unavailable; unsupported platforms require an explicit `sandbox.mode: off`.
+- `web_search` and `browser_fetch` are risky network tools; browser fetch blocks local and private targets and enforces redirect, timeout, and response limits.
+- Discovered MCP tools are always risky under the common permission policy.
+- Extension tool hooks must use recursion-safe direct execution.
+- Configuration locations, keys, and permission rules are specified in `docs/config.md`.

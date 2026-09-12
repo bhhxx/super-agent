@@ -22,80 +22,101 @@ flowchart TD
 
 ## Dependency Rule
 
-- `runtime/machine` is the domain core. It owns states, events, runtime-data changes, action plans, scheduled actions, and transitions.
-- `runtime/protocol` owns model and tool adapter contracts without state-machine policy.
+Dependencies point inward, toward `runtime/machine`. The rule is enforced, not merely
+documented: `tests/architecture/dependencies_test.go` parses the imports of every package and fails
+the build on a violation.
+
+- `runtime/machine` is the domain core. It owns states, events, runtime-data changes, action plans,
+  scheduled actions, and transitions. See `machine.md`.
+- `runtime/protocol` owns model and tool adapter contracts (`Message`, `ToolCall`, `Model`,
+  `ToolRunner`) without state-machine policy.
 - `runtime/permission` owns permission request and command classification value types.
-- `runtime/engine` drives the machine. It owns the single agent loop, synchronization, scheduled-action draining, and run identity.
+- `runtime/engine` drives the machine. It owns the single agent loop, synchronization,
+  scheduled-action draining, and run identity. See `runtime.md`.
 - `runtime/execution` implements outbound model, tool, and permission ports.
-- `runtime/session` exposes application use cases. It must not contain terminal behavior.
+- `runtime/session` exposes application use cases. It must not contain terminal behaviour, and it must
+  not import `os` or `path/filepath` — filesystem access goes through ports.
 - `tui` is an inbound adapter. It depends only on its `Conversation` port and display DTOs.
 - `app` is the composition root. It creates dependencies and converts runtime values to TUI values.
-- Runtime states become presentation-only `tui.AgentStatus` values at the app boundary; TUI owns no runtime state enum.
-- `llm`, `tools`, `store`, and `workspace` are top-level outbound adapters.
+- `llm`, `tools`, `store`, and `workspace` are top-level outbound adapters. `llm` and `tools` may
+  import `runtime/protocol` but not the root `runtime` facade; `store` and `workspace` may also import
+  `runtime/session`, which is where their ports are declared.
 
-Session persistence crosses two outbound ports:
+`tui` must never import `runtime`, and the runtime must never import `tui`. Runtime states become
+presentation-only `tui.AgentStatus` values at the app boundary, in `app/tui_adapter.go`; the TUI owns
+no runtime state enum.
 
-- `session.Repository`: transcript, metadata, approval, and checkpoint lookup operations.
-- `session.Workspace`: file capture for checkpoints and restoration for undo.
+The root `runtime` package is a compatibility facade organized by `api_model.go`, `api_machine.go`,
+`api_execution.go`, `api_engine.go`, and `api_session.go`. It exposes session persistence ports and
+metadata without importing concrete adapters. Internal packages must depend on the narrow package
+that owns a type, not on this facade.
 
-Their implementations live in top-level `store` and `workspace`; the runtime facade exposes only ports.
+The pre-facade names `ToolCallsReceived`, `ToolCallAvailable`, `EventClassifier`, and `ResultResolver`
+were intentionally retired in favour of `ToolBatchReceived`, `ToolCallNeedsApproval`, and
+`ActionResultResolver`. They are not re-exported; do not reintroduce them.
 
-Session use cases are separated by intent:
+The TUI is the only interaction surface. Headless CLI, HTTP server, WebSocket, and alternate UI
+adapters are out of scope.
+
+## Package Boundaries
+
+`runtime/machine` is the pure domain core. It performs no I/O, takes no locks, and calls no model or
+tool. Its file layout:
+
+- `state.go`: the runtime state type and its constants.
+- `event.go`: the event interface, event kinds, and `AllEvents`.
+- `runtime_data.go`: the complete mutable machine data.
+- `runtime_data_change.go`: the runtime-data change vocabulary and `AllRuntimeDataChanges`.
+- `runtime_data_change_applier.go`: transactional clone, apply, and validate.
+- `action_plan.go`: the post-transition action-queue plan.
+- `scheduled_action.go`: the post-commit scheduled-action vocabulary and `AllScheduledActions`.
+- `tool_batch.go`: queued tool-batch state.
+- `snapshot.go`: snapshot construction and state invariants.
+- `transition.go`: the static transition registry and its handlers.
+
+`runtime/engine` is split by responsibility:
+
+- `engine.go`: dependencies and construction.
+- `commands.go`: lifecycle, approval, policy, and context commands.
+- `action_loop.go`: transition dispatch and scheduled-action draining.
+- `query.go`: state queries and immutable snapshots.
+
+Engine files name `machine`, `execution`, and `protocol` types explicitly; the package has no internal
+alias facade.
+
+`runtime/execution` implements the ports:
+
+- `scheduled_action_runner.go`: executes scheduled actions, returns `ActionCompletion` values.
+- `scheduled_action_executor.go`: calls the model or the tool runner.
+- `scheduled_action_result.go`: the result vocabulary.
+- `action_queue.go`: the post-commit scheduled-action queue.
+- `action_result_resolver.go`: maps results to transition-ready events and classifies tool calls.
+- `policy.go`: permission decisions. `command_analyzer.go`: shell inspection and classification.
+- `approval_store.go`: always-allow and auto-approve state. `run_controller.go`: run id, cancel
+  function, and stale-result checks.
+
+`runtime/session` separates use cases by intent:
 
 - `session.go`: construction, configuration, reset, and snapshots.
-- `turn.go`: one conversational turn and approval flow.
+- `turn.go`: one conversational turn and the approval flow.
 - `history.go`: saved sessions, compaction, and undo.
-- `persistence.go`: best-effort persistence notifications.
+- `persistence.go`: persistence notifications.
+- `notifications.go`: the session-to-UI notification protocol.
+- `repository.go`: the persistence and workspace ports, including checkpoint creation,
+  `LoadUndoPoint`, and `TruncateAfter`.
 
-The TUI follows the same separation:
+`tui` follows the same separation:
 
 - `app.go`: Bubble Tea model construction and conversation rendering.
 - `update.go`: Bubble Tea message routing and state updates.
 - `commands.go`: slash commands and turn submission.
-- `actions.go`: cancel and clipboard actions.
+- `actions.go`: cancellation and clipboard actions.
 - `view.go`: top-level layout and informational views.
 - `styles.go`: visual theme.
 
-Dependencies point inward. In particular, `tui` must never import `runtime`, and the runtime must never import `tui`.
-
-The root `runtime` package is a compatibility facade organized by `api_model.go`, `api_machine.go`, `api_execution.go`, `api_engine.go`, and `api_session.go`. Internal packages must depend on the narrow package that owns a type, not on this facade.
-
-The TUI is the only interaction surface. Headless CLI, HTTP server, WebSocket, and alternate UI adapters are out of scope.
-
-## Runtime Rule
-
-```mermaid
-flowchart LR
-    Event --> Snapshot[Validated MachineSnapshot] --> Transition --> "RuntimeDataChange + ActionPlan" --> RuntimeDataChangeApplier[Transactional RuntimeDataChangeApplier] --> Commit[Atomic Engine Commit] --> ScheduledActionRunner --> ActionResultResolver --> Event
-```
-
-The state machine this rule produces:
-
-```mermaid
-stateDiagram
-    [*] --> Initializing
-    Initializing --> Idle: EngineReady
-    Idle --> WaitingLLM: UserMessageSubmitted
-    WaitingLLM --> Idle: AssistantMessageReceived
-    WaitingLLM --> AdvancingQueue: ToolBatchReceived
-    AdvancingQueue --> WaitingApproval: ToolCallNeedsApproval
-    AdvancingQueue --> RunningTool: ToolCallReadyToRun
-    WaitingApproval --> RunningTool: ApprovalGranted / ApprovalAlwaysGranted
-    WaitingApproval --> AdvancingQueue: ApprovalDenied
-    RunningTool --> AdvancingQueue: ToolResultReceived
-    AdvancingQueue --> WaitingLLM: ToolBatchFinished
-    WaitingLLM --> Idle: ErrorOccurred / CancelRequested
-    AdvancingQueue --> Idle: ErrorOccurred / CancelRequested
-    WaitingApproval --> Idle: ErrorOccurred / CancelRequested
-    RunningTool --> Idle: ErrorOccurred / CancelRequested
-    Idle --> Idle: ResetRequested
-```
-
-`ErrorOccurred`, `CancelRequested`, and `ResetRequested` return to `Idle` from any state; `ResetConversation` preserves `system` messages.
-
-The engine drops stale `RunID` results before event resolution. `Engine.RunTurn` starts a run with `UserMessageSubmitted`; other external machine events enter through `Engine.DispatchEvent`. The transition's action plan determines whether the loop has work. `AwaitApproval` uses a Session-provided approval port, so human input follows the same scheduled-action/result/event path as model and tool work without moving scheduling into Session. `State` names the current execution state; `RuntimeData` contains the complete mutable machine data. `SnapshotFrom` validates runtime data and exposes only transition guards. `Transition` owns state/event compatibility plus call and queue guards. The `RuntimeDataChangeApplier` clones runtime data, applies runtime-data changes, and validates the result. The engine then commits runtime data and the `ActionPlan` under one lock. Scheduled actions run only after that commit.
-
-Errors distinguish incompatible events (`UnexpectedEventError`), current-run protocol mismatches (`ProtocolViolationError`), and impossible machine state (`InvariantViolationError`).
+`store` and `workspace` are the storage and filesystem adapters. `store/store.go` writes and replays
+durable session records — see `session.md` for the durability ordering it maintains. `app/mcp.go`
+coordinates MCP lifecycle, dynamic tool registration, rollback, and atomic settings persistence.
 
 ## Refactoring Rules
 
@@ -103,13 +124,10 @@ Errors distinguish incompatible events (`UnexpectedEventError`), current-run pro
 - Keep interfaces at adapter boundaries, not between every internal function.
 - Keep files focused on one responsibility.
 - Convert transport and display DTOs only at the composition boundary.
-- Preserve behavior with transition and application-use-case tests.
+- Preserve behaviour with transition and application-use-case tests.
+- Do not scatter transition rules into `tui/`, `llm/`, or `tools/`.
+- Keep `RunID` stale filtering in the engine. Keep state, call-id, queue guards, and invariants in
+  `runtime/machine`.
 
-Engine files follow these responsibilities:
-
-- `engine.go`: dependencies and construction.
-- `query.go`: immutable snapshots and state queries.
-- `commands.go`: public runtime commands and approval handling.
-- `action_loop.go`: transition dispatch and scheduled-action draining.
-
-Permission decisions live in `execution/policy.go`; shell inspection lives in `execution/command_analyzer.go`.
+Use the existing vocabulary: `State`, `RuntimeData`, `Event`, `RuntimeDataChange`, `ActionPlan`,
+`ScheduledAction`, `Transition`.
