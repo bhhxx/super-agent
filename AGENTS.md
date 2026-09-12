@@ -35,14 +35,13 @@
 - More detail: `docs/repository-details.md`.
 - Transition teaching guide: `teach/agent-transition.md`.
 - Agent-loop teaching guide: `teach/agent-loop.md`.
-- Competitive gap roadmap: `docs/competitive-gap-tasks.md`.
+- State, context, and worked-transition guides: `teach/agent-state.md`, `teach/agent-memory.md`, `teach/agent-transition-example.md`.
 
 ## Documentation
 
 - At the end of each work session, proactively update `AGENTS.md`.
 - Keep `AGENTS.md` aligned with current architecture, commands, tests, and security rules.
 - Update `docs/repository-details.md` when architecture or runtime flow changes.
-- Update `docs/competitive-gap-tasks.md` when the roadmap against opencode, Codex CLI, or Claude Code changes.
 
 ## Commands
 

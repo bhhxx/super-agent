@@ -186,7 +186,5 @@ to an absolute path or a path relative to the workspace.
 
 ## Status
 
-- The competitive-gap roadmap is complete; see `docs/competitive-gap-tasks.md`.
-
 The Bubble Tea TUI remains the only interaction surface; headless, server, and
 alternate UI entry points are out of scope.
