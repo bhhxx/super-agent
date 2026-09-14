@@ -30,6 +30,7 @@ When you are tempted to restate something, link to it instead.
 | [tui.md](tui.md) | Feature architecture, commands, keys, approval UI, layout rules |
 | [tools.md](tools.md) | Registry, built-in tools, MCP, LSP, network guards, the sandbox |
 | [config.md](config.md) | `settings.json`, providers, permissions, sandbox parameters, flags |
+| [workspace.md](workspace.md) | The workspace model — a survey of coding-agent workspace concepts plus super-agent's project resolution, access policy, persistence, and resume |
 | [contributing.md](contributing.md) | The doc-first workflow, tests, git conventions, build |
 
 ## Reading Order
