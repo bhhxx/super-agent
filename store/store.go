@@ -34,17 +34,31 @@ type SessionID string
 type TurnID string
 
 type Metadata struct {
-	ID                     SessionID `json:"id"`
-	Title                  string    `json:"title"`
-	CreatedAt              time.Time `json:"created_at"`
-	UpdatedAt              time.Time `json:"updated_at"`
-	Provider               string    `json:"provider"`
-	Model                  string    `json:"model"`
-	CWD                    string    `json:"cwd"`
-	InstructionFingerprint string    `json:"instruction_fingerprint"`
-	InstructionSources     []string  `json:"instruction_sources,omitempty"`
-	CurrentTurnID          TurnID    `json:"current_turn_id"`
-	ParentID               SessionID `json:"parent_id,omitempty"`
+	ID                     SessionID      `json:"id"`
+	Title                  string         `json:"title"`
+	CreatedAt              time.Time      `json:"created_at"`
+	UpdatedAt              time.Time      `json:"updated_at"`
+	Provider               string         `json:"provider"`
+	Model                  string         `json:"model"`
+	CWD                    string         `json:"cwd"`
+	InstructionFingerprint string         `json:"instruction_fingerprint"`
+	InstructionSources     []string       `json:"instruction_sources,omitempty"`
+	CurrentTurnID          TurnID         `json:"current_turn_id"`
+	ParentID               SessionID      `json:"parent_id,omitempty"`
+	ProjectID              string         `json:"project_id,omitempty"`
+	ConfigRoot             string         `json:"config_root,omitempty"`
+	Workspace              *WorkspaceSpec `json:"workspace,omitempty"`
+}
+
+type WorkspaceSpec struct {
+	PrimaryRoot string              `json:"primary_root"`
+	CWD         string              `json:"cwd"`
+	Roots       []WorkspaceRootSpec `json:"roots"`
+}
+
+type WorkspaceRootSpec struct {
+	Path   string `json:"path"`
+	Access string `json:"access"`
 }
 
 type Record struct {
@@ -251,6 +265,24 @@ func (s *Store) SetCurrentTurn(id SessionID, turn TurnID) error {
 		return err
 	}
 	meta.CurrentTurnID = turn
+	meta.UpdatedAt = time.Now().UTC()
+	return s.writeMeta(meta)
+}
+
+// SaveWorkspaceDescription persists the durable workspace description and its
+// canonical cwd. It rewrites only those fields of the session metadata so an
+// upgrade from legacy metadata cannot disturb unrelated values.
+func (s *Store) SaveWorkspaceDescription(id SessionID, spec WorkspaceSpec) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	meta, err := s.metadataUnlocked(id)
+	if err != nil {
+		return err
+	}
+	cloned := spec
+	cloned.Roots = append([]WorkspaceRootSpec(nil), spec.Roots...)
+	meta.Workspace = &cloned
+	meta.CWD = spec.CWD
 	meta.UpdatedAt = time.Now().UTC()
 	return s.writeMeta(meta)
 }

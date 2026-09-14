@@ -6,7 +6,7 @@ Super Agent follows a hexagonal architecture with a state-machine domain core.
 flowchart TD
     app["app (composition root)"]
     tui["tui — TUI adapter"]
-    adapters["llm / tools / store / workspace"]
+    adapters["llm / tools / store / project / workspace"]
     port["Conversation port"]
     session["runtime/session"]
     engine["runtime/engine"]
@@ -38,7 +38,7 @@ the build on a violation.
   not import `os` or `path/filepath` — filesystem access goes through ports.
 - `tui` is an inbound adapter. It depends only on its `Conversation` port and display DTOs.
 - `app` is the composition root. It creates dependencies and converts runtime values to TUI values.
-- `llm`, `tools`, `store`, and `workspace` are top-level outbound adapters. `llm` and `tools` may
+- `llm`, `tools`, `store`, `project`, and `workspace` are top-level adapters. `llm` and `tools` may
   import `runtime/protocol` but not the root `runtime` facade; `store` and `workspace` may also import
   `runtime/session`, which is where their ports are declared.
 
@@ -103,12 +103,15 @@ alias facade.
 - `persistence.go`: persistence notifications.
 - `notifications.go`: the session-to-UI notification protocol.
 - `repository.go`: the persistence and workspace ports, including checkpoint creation,
-  `LoadUndoPoint`, and `TruncateAfter`.
+  `LoadUndoPoint`, `TruncateAfter`, and the one-time `SaveWorkspaceDescription` upgrade.
 
 The TUI's feature ownership, message routing, focus, effects, views, and port rules are specified in
 [`tui.md`](tui.md#feature-architecture).
 
-`store` and `workspace` are the storage and filesystem adapters. `store/store.go` writes and replays
+`project` resolves the selected project independently from filesystem access policy. `workspace.Context`
+is the process-independent source of truth for workspace roots and cwd, while `workspace.Workspace`
+adapts it to the session checkpoint, attachment, export, and workspace-restore ports (including the
+one-time canonical upgrade of legacy saved paths). `store/store.go` writes and replays
 durable session records — see `session.md` for the durability ordering it maintains. `app/mcp.go`
 coordinates MCP lifecycle, dynamic tool registration, rollback, and atomic settings persistence.
 

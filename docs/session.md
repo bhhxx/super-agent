@@ -26,6 +26,24 @@ therefore exactly whether it is still in `Messages`.
 
 ## Initial Context
 
+At startup, the application resolves a `Project` first. An explicitly selected directory wins;
+otherwise resolution walks from the process cwd toward the filesystem root and chooses the first
+directory containing `.git`, falling back to the process cwd. In this first version the application
+creates a workspace whose primary root and cwd are both the project root. These remain separate values
+so additional access roots, worktrees, and child-specific workspaces do not require redefining a
+project.
+
+Workspace access roots and instruction/config roots are separate concepts. Adding a readable or
+writable workspace root grants file access only; it never causes `AGENTS.md`, `CLAUDE.md`, hooks,
+skills, plugins, or configuration to be loaded from that root. Project instruction discovery uses the
+selected project root as its configuration root.
+
+`WorkspaceSpec` is the durable description of the workspace: primary root, cwd, and roots with their
+access modes. It contains no authorization behaviour. `workspace.Context` is reconstructed from that
+description and performs canonicalization, symlink validation, containment, and read/write decisions.
+New session metadata persists `ProjectID`, `ConfigRoot`, and `WorkspaceSpec` as independent fields;
+none is derived from another during replay.
+
 `app.NewSession` builds one `system` message from:
 
 ```text
@@ -104,7 +122,27 @@ orphan session that looks complete.
 
 ## Turning a Session: `/resume`
 
-`Session.Resume` loads the event log through `Repository.Load`, rebuilds `Messages`, and calls
+`Session.Resume` loads the event log and saved workspace through `Repository.Load`. Before changing the
+active session it validates every saved workspace root and cwd against the current filesystem and
+reconstructs a fresh context. Missing, moved, or symlink-replaced primary roots, missing additional
+roots, and a cwd outside the restored roots are hard failures reported as `saved workspace is no
+longer valid`; resume never falls back to the process cwd or the current `--cwd`. The complete
+workspace is activated only after validation succeeds, so built-in file, command, and LSP tools share
+the restored context.
+
+Sessions written before `WorkspaceSpec` carry only a saved metadata `cwd`, which was never promised to
+be canonical. On the first resume the session upgrades that metadata exactly once: it resolves the
+saved `cwd` against the current filesystem, validates the result, and persists the canonical
+description before mutating anything. Every later resume then takes the strict path above, so the
+lenient upgrade never becomes a permanent fallback. An old session without a saved cwd cannot be
+resumed. The upgrade uses the old session's data, never current process state, and it leaves
+`ProjectID`, `ConfigRoot`, and other metadata untouched.
+
+A session that already carries a `WorkspaceSpec` is never upgraded. If its saved spec no longer
+validates, the resume fails instead of falling back to `cwd`. If the canonical upgrade cannot be
+persisted, the resume fails rather than report a migration that did not happen.
+
+After workspace validation, `Session.Resume` rebuilds `Messages` and calls
 `Engine.ReplaceMessages`, which:
 
 - cancels the current run so late results are dropped;
@@ -113,6 +151,16 @@ orphan session that looks complete.
 - continues later turns from the restored history.
 
 `/resume` restores persisted *messages*. It does not resume a half-executed tool call.
+
+`ConfigRoot` remains independent on resume. Restoring workspace access does not scan any workspace
+root for instructions, hooks, skills, plugins, or project configuration. This phase preserves the
+saved config-root identity but does not hot-reload extension configuration while switching sessions.
+
+Application storage such as `~/.superagent/sessions`, logs, caches, and a future centrally managed
+worktree area is not a workspace root and does not require workspace authorization. The existing
+delegate worktree path is currently created inside the user workspace, so its write check remains
+appropriate; moving that facility into application storage would require a separate storage adapter,
+not an additional workspace root.
 
 ## Compacting: `/compact [summary]`
 

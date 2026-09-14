@@ -63,11 +63,26 @@ func NewPersistentSession(engine *Engine, repository Repository, workspace Works
 }
 
 func CreatePersistentSession(engine *Engine, repository Repository, workspace Workspace, meta Metadata, initial []Message) (*Session, error) {
+	if workspace == nil {
+		return nil, errors.New("workspace is not configured")
+	}
+	spec := workspace.Spec()
+	if err := workspace.Validate(spec); err != nil {
+		return nil, err
+	}
+	meta.WorkspaceSpec = workspaceSpecPointer(spec)
+	meta.CWD = spec.CWD
 	created, err := repository.Create(meta, initial)
 	if err != nil {
 		return nil, err
 	}
 	return NewPersistentSession(engine, repository, workspace, created), nil
+}
+
+func workspaceSpecPointer(spec WorkspaceSpec) *WorkspaceSpec {
+	cloned := spec
+	cloned.Roots = append([]WorkspaceRootSpec(nil), spec.Roots...)
+	return &cloned
 }
 
 func (s *Session) ConfigurePermissions(mode PermissionMode, rules PermissionRules) {

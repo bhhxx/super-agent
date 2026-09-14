@@ -2,9 +2,9 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -32,10 +32,14 @@ func NewSessionWithMCP(cfg Config) (*runtime.Session, *MCPController, error) {
 }
 
 func NewSessionWithExtensions(cfg Config) (*runtime.Session, *MCPController, *AgentController, error) {
-	cwd, err := os.Getwd()
+	workspaceContext, err := contextForConfig(cfg)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	cwd := workspaceContext.GetCWD()
+	configRoot := firstNonEmpty(cfg.ConfigRoot, cfg.Project.Root, cwd)
+	workspaceRuntime := workspace.New(workspaceContext)
+	cfg.Sandbox.Workspace = workspaceContext.GetPrimaryRoot()
 	if err := telemetry.Configure(cfg.TelemetryPath); err != nil {
 		return nil, nil, nil, err
 	}
@@ -86,7 +90,7 @@ func NewSessionWithExtensions(cfg Config) (*runtime.Session, *MCPController, *Ag
 	if cfg.NoTools {
 		toolRunner = tools.NoTools{}
 	} else {
-		registry, err = tools.SandboxedRegistry(cfg.Sandbox)
+		registry, err = tools.SandboxedRegistry(cfg.Sandbox, workspaceRuntime)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -107,7 +111,7 @@ func NewSessionWithExtensions(cfg Config) (*runtime.Session, *MCPController, *Ag
 		// The runtime session owns extension process lifetime after creation.
 		extension = manager
 		if len(cfg.LSPServers) > 0 {
-			lspManager, connectErr := lsptools.Connect(context.Background(), cwd, cfg.LSPServers)
+			lspManager, connectErr := lsptools.Connect(context.Background(), workspaceRuntime, cfg.LSPServers)
 			if connectErr != nil {
 				return nil, nil, nil, connectErr
 			}
@@ -123,7 +127,7 @@ func NewSessionWithExtensions(cfg Config) (*runtime.Session, *MCPController, *Ag
 		toolFilter.setAllowed(profile.Tools)
 		toolRunner = toolFilter
 	}
-	initial, bundle, err := initialMessagesWithAgent(cwd, profile)
+	initial, bundle, err := initialMessagesWithAgent(configRoot, profile)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -147,16 +151,17 @@ func NewSessionWithExtensions(cfg Config) (*runtime.Session, *MCPController, *Ag
 	if err := engine.Ready(); err != nil {
 		return nil, nil, nil, err
 	}
-	session, err := runtime.CreatePersistentSession(engine, repository, workspace.Workspace{}, runtime.SessionMetadata{
+	session, err := runtime.CreatePersistentSession(engine, repository, workspaceRuntime, runtime.SessionMetadata{
 		Provider: profile.Provider, Model: profile.Model, CWD: cwd,
 		Title: filepath.Base(cwd), InstructionSources: instructionSourcePaths(bundle),
+		ProjectID: cfg.Project.ID, ConfigRoot: configRoot,
 	}, initial)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if registry != nil {
 		registry.SetCheckpointCallback(session.Checkpoint)
-		delegate := &subagentTool{parent: session, repository: repository, profiles: profiles, providers: providers, sandbox: cfg.Sandbox, rules: cfg.PermissionRules, base: cwd, sequence: &atomic.Uint64{}}
+		delegate := &subagentTool{parent: session, repository: repository, profiles: profiles, providers: providers, sandbox: cfg.Sandbox, rules: cfg.PermissionRules, base: cwd, workspace: workspaceRuntime, sequence: &atomic.Uint64{}}
 		if err := registry.Add(delegate); err != nil {
 			_ = session.Close()
 			return nil, nil, nil, err
@@ -189,6 +194,13 @@ func NewSessionWithExtensions(cfg Config) (*runtime.Session, *MCPController, *Ag
 	}
 	agents := &AgentController{session: session, model: router, profiles: profiles, providers: providers, workflows: workflows, tools: toolFilter, base: cwd, current: profile.Name}
 	return session, controller, agents, nil
+}
+
+func contextForConfig(cfg Config) (*workspace.Context, error) {
+	if cfg.Workspace != nil {
+		return cfg.Workspace, nil
+	}
+	return nil, errors.New("workspace context is required")
 }
 
 type closerFunc func() error

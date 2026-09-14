@@ -23,7 +23,7 @@ func TestDependencyRule(t *testing.T) {
 			return !strings.HasPrefix(path, "super-agent/runtime") || path == "super-agent/runtime/protocol"
 		}, directory+" may depend only on runtime ports")
 	}
-	for _, directory := range []string{"store", "workspace"} {
+	for _, directory := range []string{"store", "workspace", "project"} {
 		assertImports(t, filepath.Join(root, directory), func(path string) bool {
 			return !strings.HasPrefix(path, "super-agent/runtime") || path == "super-agent/runtime/protocol" || path == "super-agent/runtime/session"
 		}, directory+" may depend only on runtime ports")

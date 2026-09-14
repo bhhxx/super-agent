@@ -76,7 +76,8 @@ tui/                    Bubble Tea inbound adapter
 llm/                    provider adapters
 tools/                  file, command, git, web, MCP, and LSP tools
 store/                  durable session storage
-workspace/              filesystem checkpoint adapter
+project/                project root resolution
+workspace/              workspace access policy and filesystem session adapter
 tests/                  external package tests by module
 docs/                   this specification
 ```

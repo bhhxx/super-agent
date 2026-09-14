@@ -7,7 +7,6 @@ import (
 
 	. "super-agent/runtime"
 	"super-agent/store"
-	"super-agent/workspace"
 )
 
 func TestSessionExportsMarkdownJSONAndLocalHTML(t *testing.T) {
@@ -15,7 +14,7 @@ func TestSessionExportsMarkdownJSONAndLocalHTML(t *testing.T) {
 	t.Chdir(dir)
 	messages := []Message{{Role: RoleSystem, Content: "rules"}, {Role: RoleUser, Content: "<hello>"}}
 	engine := NewEngineWithExecutor(&staticExecutor{}, messages)
-	session := NewPersistentSession(engine, nil, workspace.Workspace{}, SessionMetadata{ID: "session-1", Title: "Demo", Provider: "test", Model: "model", CWD: dir})
+	session := NewPersistentSession(engine, nil, configuredWorkspace(t, dir), SessionMetadata{ID: "session-1", Title: "Demo", Provider: "test", Model: "model", CWD: dir})
 	for _, format := range []string{"markdown", "json", "html"} {
 		path, err := session.Export(format)
 		if err != nil {
@@ -50,7 +49,7 @@ func TestSessionExportIncludesPersistedAuditEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := NewEngineWithExecutor(&staticExecutor{}, nil)
-	session := NewPersistentSession(engine, store.NewRepository(st), workspace.Workspace{}, SessionMetadata{ID: SessionID(meta.ID), Title: "Audit"})
+	session := NewPersistentSession(engine, store.NewRepository(st), configuredWorkspace(t, dir), SessionMetadata{ID: SessionID(meta.ID), Title: "Audit"})
 	path, err := session.Export("json")
 	if err != nil {
 		t.Fatal(err)

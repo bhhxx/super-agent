@@ -4,15 +4,17 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"super-agent/runtime"
 	. "super-agent/tools"
+	"super-agent/workspace"
 )
 
 func TestFileToolsExposeFirstPriorityTools(t *testing.T) {
-	specs := DefaultRegistry().Specs()
+	specs := DefaultRegistry(testWorkspace(t)).Specs()
 	names := map[string]bool{}
 	for _, spec := range specs {
 		names[spec.Name] = true
@@ -28,7 +30,7 @@ func TestReadFileSupportsLineRange(t *testing.T) {
 	t.Chdir(t.TempDir())
 	mustWrite(t, "notes.txt", "one\ntwo\nthree\n")
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "read_file",
 		Input: `{"path":"notes.txt","start_line":2,"end_line":3}`,
 	})
@@ -46,12 +48,12 @@ func TestReadFileRejectsPathOutsideWorkingDirectory(t *testing.T) {
 	mustWriteAbs(t, outside, "secret")
 	t.Chdir(dir)
 
-	_, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	_, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "read_file",
 		Input: `{"path":"../secret.txt"}`,
 	})
-	if err == nil || !strings.Contains(err.Error(), "outside working directory") {
-		t.Fatalf("err = %v, want outside working directory", err)
+	if err == nil || !strings.Contains(err.Error(), "outside readable workspace roots") {
+		t.Fatalf("err = %v, want workspace rejection", err)
 	}
 }
 
@@ -61,7 +63,7 @@ func TestListFilesReturnsMatchingRelativeFiles(t *testing.T) {
 	mustWrite(t, "nested/b.go", "")
 	mustWrite(t, "nested/c.txt", "")
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "list_files",
 		Input: `{"path":".","pattern":"*.go"}`,
 	})
@@ -78,7 +80,7 @@ func TestSearchFindsTextWithLineNumbers(t *testing.T) {
 	mustWrite(t, "a.txt", "alpha\nneedle\n")
 	mustWrite(t, "nested/b.txt", "needle again\n")
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "search",
 		Input: `{"query":"needle","path":"."}`,
 	})
@@ -94,7 +96,7 @@ func TestApplyPatchReplacesExpectedText(t *testing.T) {
 	t.Chdir(t.TempDir())
 	mustWrite(t, "main.go", "package main\n\nfunc main() {}\n")
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "apply_patch",
 		Input: `{"path":"main.go","old_text":"func main() {}","new_text":"func main() {\n\tprintln(\"hi\")\n}"}`,
 	})
@@ -112,7 +114,7 @@ func TestApplyPatchReplacesExpectedText(t *testing.T) {
 func TestWriteFileCreatesParentDirectories(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "write_file",
 		Input: `{"path":"nested/out.txt","content":"hello"}`,
 	})
@@ -124,6 +126,29 @@ func TestWriteFileCreatesParentDirectories(t *testing.T) {
 	}
 	if content := mustRead(t, "nested/out.txt"); content != "hello" {
 		t.Fatalf("content = %q, want hello", content)
+	}
+}
+
+func TestFileToolsUseInjectedRootAccess(t *testing.T) {
+	primary := t.TempDir()
+	readOnly := t.TempDir()
+	if err := os.WriteFile(filepath.Join(readOnly, "shared.txt"), []byte("shared"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspaceContext, err := workspace.NewContext(primary, primary, []workspace.Root{
+		{Path: primary, Access: workspace.AccessReadWrite},
+		{Path: readOnly, Access: workspace.AccessRead},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := RegistryForWorkspace(workspaceContext)
+	path := filepath.Join(readOnly, "shared.txt")
+	if _, err := registry.Run(context.Background(), runtime.ToolCall{Name: "read_file", Input: `{"path":` + strconv.Quote(path) + `}`}); err != nil {
+		t.Fatalf("read additional root: %v", err)
+	}
+	if _, err := registry.Run(context.Background(), runtime.ToolCall{Name: "write_file", Input: `{"path":` + strconv.Quote(path) + `,"content":"changed"}`}); err == nil || !strings.Contains(err.Error(), "outside writable workspace roots") {
+		t.Fatalf("write read-only root error = %v", err)
 	}
 }
 

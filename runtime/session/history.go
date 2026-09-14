@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -29,7 +30,7 @@ func (s *Session) Fork(title string) (Metadata, error) {
 		title = current.Title + " (fork)"
 	}
 	messages := append([]Message(nil), s.Snapshot().Messages...)
-	created, err := s.repository.Create(Metadata{Title: title, Provider: current.Provider, Model: current.Model, CWD: current.CWD, InstructionSources: current.InstructionSources, ParentID: current.ID}, messages)
+	created, err := s.repository.Create(Metadata{Title: title, Provider: current.Provider, Model: current.Model, CWD: current.CWD, InstructionSources: current.InstructionSources, ParentID: current.ID, ProjectID: current.ProjectID, ConfigRoot: current.ConfigRoot, WorkspaceSpec: workspaceSpecPointer(s.workspace.Spec())}, messages)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -127,6 +128,33 @@ func (s *Session) Resume(id SessionID) error {
 	if err != nil {
 		return err
 	}
+	if s.workspace == nil {
+		return errors.New("workspace is not configured")
+	}
+	spec, legacy, err := savedWorkspaceSpec(meta)
+	if err != nil {
+		return err
+	}
+	if legacy {
+		// Sessions written before WorkspaceSpec saved only a cwd and never
+		// promised it was canonical, so upgrade it once: re-resolve the saved
+		// cwd against the current filesystem and persist the result. Every
+		// later resume then takes the strict WorkspaceSpec path.
+		spec, err = s.workspace.Canonicalize(spec)
+		if err != nil {
+			return fmt.Errorf("saved workspace is no longer valid: %w", err)
+		}
+	}
+	if err := s.workspace.Validate(spec); err != nil {
+		return fmt.Errorf("saved workspace is no longer valid: %w", err)
+	}
+	if legacy {
+		// Persist before mutating the active session so a failed write leaves
+		// the resume untouched instead of half-applied.
+		if err := s.repository.SaveWorkspaceDescription(id, spec); err != nil {
+			return fmt.Errorf("persist migrated workspace: %w", err)
+		}
+	}
 	memories, err := s.repository.LoadMemory()
 	if err != nil {
 		return err
@@ -135,6 +163,11 @@ func (s *Session) Resume(id SessionID) error {
 	if err := s.repository.SaveConversationReplacement(id, messages); err != nil {
 		return err
 	}
+	if err := s.workspace.Activate(spec); err != nil {
+		return fmt.Errorf("saved workspace is no longer valid: %w", err)
+	}
+	meta.WorkspaceSpec = workspaceSpecPointer(spec)
+	meta.CWD = spec.CWD
 	s.engine.ReplaceMessages(messages)
 	s.metaMu.Lock()
 	s.meta = meta
@@ -142,6 +175,23 @@ func (s *Session) Resume(id SessionID) error {
 	s.emitter = newSnapshotEmitter()
 	s.emitter.emittedMessages = len(messages)
 	return nil
+}
+
+// savedWorkspaceSpec returns the durable workspace description a resume must
+// restore. The legacy flag marks metadata written before WorkspaceSpec: it
+// carries only a cwd, which the resume upgrades to a canonical spec once.
+func savedWorkspaceSpec(meta Metadata) (WorkspaceSpec, bool, error) {
+	if meta.WorkspaceSpec != nil {
+		return *workspaceSpecPointer(*meta.WorkspaceSpec), false, nil
+	}
+	if meta.CWD == "" {
+		return WorkspaceSpec{}, false, errors.New("saved workspace is no longer valid: legacy session has no cwd")
+	}
+	return WorkspaceSpec{
+		PrimaryRoot: meta.CWD,
+		CWD:         meta.CWD,
+		Roots:       []WorkspaceRootSpec{{Path: meta.CWD, Access: WorkspaceAccessReadWrite}},
+	}, true, nil
 }
 
 func (s *Session) RenameSession(id SessionID, title string) error {

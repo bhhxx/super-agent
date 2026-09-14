@@ -18,6 +18,7 @@ Common flags:
 - `--no-tools` — disable tool calling
 - `--yolo` — auto-approve tool execution
 - `--approval-mode <ask|accept-edits|plan|bypass>` — choose the permission mode
+- `--cwd <directory>` — explicitly select the project directory
 
 To build and install the binary:
 

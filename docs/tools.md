@@ -5,7 +5,10 @@ see `architecture.md`.
 
 ## Registry
 
-`tools.Registry` holds the visible tools. `Registry.Add` merges dynamically discovered tools
+`tools.Registry` holds the visible tools. Both `tools.DefaultRegistry` and `tools.SandboxedRegistry`
+require the application to inject one workspace context when constructing the built-ins; tools do not
+discover their policy from the process working directory.
+`Registry.Add` merges dynamically discovered tools
 atomically and rejects a batch outright when a name is empty, duplicated within the batch, or already
 registered, so a partial merge cannot leave the set inconsistent. `tools.DefaultRegistry` builds the
 built-ins; `tools.SandboxedRegistry` wires the same set to a sandboxed command runner.
@@ -33,8 +36,24 @@ Thirteen tools ship in `DefaultRegistry`:
 `delegate` is registered by `app` (`app/session.go`) rather than by the tools package. It runs a task
 in a child agent and returns the final result; see `session.md` for child sessions and worktrees.
 
-File-oriented tools reject paths outside the working directory. Risky tools require policy approval
-unless the active mode allows them.
+Every built-in file-oriented tool resolves paths and checks read or write access through the injected
+workspace context. Relative paths resolve from the workspace cwd. Containment uses canonical paths
+and path-component-aware relative checks, including the nearest existing ancestor for paths that will
+be created; lexical prefixes and symlinks cannot grant access. LSP file reads use the same policy, and
+language-server processes start in the workspace cwd. Strict command sandbox construction takes its
+workspace bind root from the same injected context rather than the process cwd.
+
+The injected workspace is a switchable runtime binding. A successful session resume replaces its
+validated context, and subsequent built-in filesystem and command calls observe the restored cwd and
+roots. Language-server clients lazily reconnect when that cwd changes. MCP servers are configured
+external processes and are not a filesystem-policy adapter; their lifecycle is unchanged by workspace
+resume.
+Risky tools require policy approval unless the active mode allows them.
+
+Command tools default to the workspace cwd. A model-supplied command cwd must resolve to a readable
+workspace directory. Workspace checks are not an operating-system security boundary: once a shell
+process starts, the context alone cannot prevent commands such as `cat ~/.ssh/id_rsa`. The independent
+OS sandbox described below is responsible for containing subprocess filesystem access when enabled.
 
 ## MCP
 

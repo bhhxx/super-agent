@@ -28,9 +28,16 @@ func newPlatformSandbox(config SandboxConfig) (commandSandbox, error) {
 	return &bubblewrapSandbox{bwrap: bwrap, prlimit: prlimit, config: config}, nil
 }
 
-func (s *bubblewrapSandbox) wrap(cwd, name string, commandArgs []string) (string, []string, string, error) {
+func (s *bubblewrapSandbox) wrap(workspaceRoot, cwd, name string, commandArgs []string) (string, []string, string, error) {
+	if workspaceRoot == "" {
+		return "", nil, "", errors.New("sandbox workspace is not configured")
+	}
+	workspaceRoot, err := filepath.EvalSymlinks(workspaceRoot)
+	if err != nil {
+		return "", nil, "", err
+	}
 	if cwd == "" {
-		cwd = s.config.Workspace
+		cwd = workspaceRoot
 	}
 	absCWD, err := filepath.Abs(cwd)
 	if err != nil {
@@ -40,7 +47,7 @@ func (s *bubblewrapSandbox) wrap(cwd, name string, commandArgs []string) (string
 	if err != nil {
 		return "", nil, "", err
 	}
-	rel, err := filepath.Rel(s.config.Workspace, absCWD)
+	rel, err := filepath.Rel(workspaceRoot, absCWD)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", nil, "", errors.New("sandbox cwd is outside workspace")
 	}
@@ -49,7 +56,7 @@ func (s *bubblewrapSandbox) wrap(cwd, name string, commandArgs []string) (string
 		"--die-with-parent", "--new-session", "--unshare-all",
 		"--ro-bind", "/", "/",
 		"--tmpfs", "/tmp", "--tmpfs", "/var/tmp",
-		"--bind", s.config.Workspace, s.config.Workspace,
+		"--bind", workspaceRoot, workspaceRoot,
 		"--proc", "/proc", "--dev", "/dev",
 		"--dir", "/tmp/super-agent-home", "--dir", "/tmp/super-agent-cache",
 		"--setenv", "HOME", "/tmp/super-agent-home",
@@ -70,5 +77,5 @@ func (s *bubblewrapSandbox) wrap(cwd, name string, commandArgs []string) (string
 		"--", name,
 	)
 	args = append(args, commandArgs...)
-	return s.bwrap, args, s.config.Workspace, nil
+	return s.bwrap, args, workspaceRoot, nil
 }

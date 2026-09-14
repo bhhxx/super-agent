@@ -2,8 +2,11 @@ package runtime_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -15,7 +18,19 @@ import (
 
 func persistentSession(engine *Engine, st *store.Store, meta store.Metadata) *Session {
 	repository := store.NewRepository(st)
-	return NewPersistentSession(engine, repository, workspace.Workspace{}, SessionMetadata{
+	root := meta.CWD
+	if root == "" {
+		var err error
+		root, err = os.Getwd()
+		if err != nil {
+			panic(err)
+		}
+	}
+	context, err := workspace.NewDefaultContext(root)
+	if err != nil {
+		panic(err)
+	}
+	return NewPersistentSession(engine, repository, workspace.New(context), SessionMetadata{
 		ID: SessionID(meta.ID), Title: meta.Title, Provider: meta.Provider, Model: meta.Model,
 		CWD: meta.CWD, InstructionSources: meta.InstructionSources,
 	})
@@ -49,6 +64,206 @@ func TestPersistentSessionResumesConversationWithToolResults(t *testing.T) {
 	if messages[2].Role != RoleTool || messages[2].Content != "file contents" || messages[2].ToolCallID != "call-1" {
 		t.Fatalf("tool message = %+v", messages[2])
 	}
+}
+
+func TestResumeMigratesLegacyWorkspaceToCanonicalSpec(t *testing.T) {
+	st := store.New(t.TempDir())
+	legacyCWD := t.TempDir()
+	meta, err := st.Create(store.Metadata{Title: "legacy", Provider: "test", Model: "test-model", CWD: legacyCWD, InstructionSources: []string{"AGENTS.md"}}, []Message{{Role: RoleSystem, Content: "rules"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngineWithExecutor(&staticExecutor{}, nil)
+	session := persistentSession(engine, st, store.Metadata{ID: "new"})
+	if err := session.Resume(SessionID(meta.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	canonical, err := filepath.EvalSymlinks(legacyCWD)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, err := st.Metadata(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Workspace == nil {
+		t.Fatal("legacy session was not upgraded to a WorkspaceSpec")
+	}
+	if persisted.Workspace.PrimaryRoot != canonical || persisted.Workspace.CWD != canonical || persisted.CWD != canonical {
+		t.Fatalf("migrated workspace = %+v cwd = %q, want %q", persisted.Workspace, persisted.CWD, canonical)
+	}
+	if len(persisted.Workspace.Roots) != 1 || persisted.Workspace.Roots[0].Path != canonical || persisted.Workspace.Roots[0].Access != "read_write" {
+		t.Fatalf("migrated roots = %+v", persisted.Workspace.Roots)
+	}
+	// Migration touches only the workspace description: unrelated metadata,
+	// including ProjectID and ConfigRoot, keeps its saved value.
+	if persisted.Title != "legacy" || persisted.Provider != "test" || persisted.Model != "test-model" || !persisted.CreatedAt.Equal(meta.CreatedAt) {
+		t.Fatalf("migration changed unrelated metadata: %+v", persisted)
+	}
+	if len(persisted.InstructionSources) != 1 || persisted.InstructionSources[0] != "AGENTS.md" {
+		t.Fatalf("migration changed instruction sources: %+v", persisted.InstructionSources)
+	}
+	if persisted.ProjectID != "" || persisted.ConfigRoot != "" {
+		t.Fatalf("migration derived ProjectID/ConfigRoot from the workspace: %+v", persisted)
+	}
+}
+
+func TestResumeLegacyWorkspaceMigrationIsIdempotent(t *testing.T) {
+	st := store.New(t.TempDir())
+	legacyCWD := t.TempDir()
+	meta, err := st.Create(store.Metadata{Provider: "test", Model: "test-model", CWD: legacyCWD}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngineWithExecutor(&staticExecutor{}, nil)
+	session := persistentSession(engine, st, store.Metadata{ID: "new"})
+	if err := session.Resume(SessionID(meta.ID)); err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.Metadata(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Workspace == nil {
+		t.Fatal("legacy session was not migrated")
+	}
+
+	if err := session.Resume(SessionID(meta.ID)); err != nil {
+		t.Fatalf("second resume failed on migrated metadata: %v", err)
+	}
+	second, err := st.Metadata(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first.Workspace, second.Workspace) {
+		t.Fatalf("migration is not idempotent: %+v then %+v", first.Workspace, second.Workspace)
+	}
+}
+
+func TestResumeUsesStrictValidationAfterLegacyMigration(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation commonly requires elevated privileges on Windows")
+	}
+	parent := t.TempDir()
+	savedRoot := filepath.Join(parent, "project")
+	if err := os.Mkdir(savedRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st := store.New(t.TempDir())
+	meta, err := st.Create(store.Metadata{Provider: "test", Model: "test-model", CWD: savedRoot}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngineWithExecutor(&staticExecutor{}, nil)
+	session := persistentSession(engine, st, store.Metadata{ID: "new"})
+	if err := session.Resume(SessionID(meta.ID)); err != nil {
+		t.Fatal(err)
+	}
+
+	// The one-time upgrade persisted the canonical root, so replacing it with
+	// an escaping symlink must now fail the strict check instead of silently
+	// adopting the new target.
+	if err := os.Remove(savedRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), savedRoot); err != nil {
+		t.Fatal(err)
+	}
+	err = session.Resume(SessionID(meta.ID))
+	if err == nil || !strings.Contains(err.Error(), "saved workspace is no longer valid") {
+		t.Fatalf("resume error = %v, want strict validation after migration", err)
+	}
+}
+
+func TestResumeDoesNotFallBackToLegacyWhenSavedSpecIsInvalid(t *testing.T) {
+	validCWD := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "missing")
+	st := store.New(t.TempDir())
+	spec := WorkspaceSpec{PrimaryRoot: missing, CWD: missing, Roots: []WorkspaceRootSpec{{Path: missing, Access: WorkspaceAccessReadWrite}}}
+	meta, err := store.NewRepository(st).Create(SessionMetadata{
+		Provider: "test", Model: "test-model", CWD: validCWD, WorkspaceSpec: &spec,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngineWithExecutor(&staticExecutor{}, nil)
+	session := persistentSession(engine, st, store.Metadata{ID: "new"})
+	err = session.Resume(SessionID(meta.ID))
+	if err == nil || !strings.Contains(err.Error(), "saved workspace is no longer valid") {
+		t.Fatalf("resume error = %v, want invalid saved spec rejection", err)
+	}
+	persisted, err := st.Metadata(store.SessionID(meta.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Workspace == nil || persisted.Workspace.PrimaryRoot != missing {
+		t.Fatalf("resume mutated the saved spec instead of rejecting it: %+v", persisted.Workspace)
+	}
+}
+
+func TestResumeFailsWhenWorkspaceMigrationCannotBePersisted(t *testing.T) {
+	st := store.New(t.TempDir())
+	legacyCWD := t.TempDir()
+	meta, err := st.Create(store.Metadata{Provider: "test", Model: "test-model", CWD: legacyCWD}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := failingWorkspaceRepository{store.NewRepository(st)}
+	engine := NewEngineWithExecutor(&staticExecutor{}, nil)
+	session := NewPersistentSession(engine, repository, configuredWorkspace(t, t.TempDir()), SessionMetadata{ID: "new"})
+	err = session.Resume(SessionID(meta.ID))
+	if err == nil || !strings.Contains(err.Error(), "persist migrated workspace") {
+		t.Fatalf("resume error = %v, want migration persistence failure", err)
+	}
+	persisted, err := st.Metadata(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Workspace != nil {
+		t.Fatalf("failed migration was persisted: %+v", persisted.Workspace)
+	}
+}
+
+type failingWorkspaceRepository struct{ *store.Repository }
+
+func (failingWorkspaceRepository) SaveWorkspaceDescription(SessionID, WorkspaceSpec) error {
+	return errors.New("workspace metadata write failed")
+}
+
+func TestResumeUpgradesLegacyWorkspaceOnlyOnce(t *testing.T) {
+	st := store.New(t.TempDir())
+	legacyCWD := t.TempDir()
+	meta, err := st.Create(store.Metadata{Provider: "test", Model: "test-model", CWD: legacyCWD}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spy := &canonicalizeSpy{Workspace: configuredWorkspace(t, t.TempDir())}
+	engine := NewEngineWithExecutor(&staticExecutor{}, nil)
+	session := NewPersistentSession(engine, store.NewRepository(st), spy, SessionMetadata{ID: "new"})
+
+	if err := session.Resume(SessionID(meta.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if spy.calls != 1 {
+		t.Fatalf("canonicalize calls = %d, want 1 on the first resume", spy.calls)
+	}
+	if err := session.Resume(SessionID(meta.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if spy.calls != 1 {
+		t.Fatalf("canonicalize calls = %d, want the legacy upgrade to run once", spy.calls)
+	}
+}
+
+type canonicalizeSpy struct {
+	*workspace.Workspace
+	calls int
+}
+
+func (s *canonicalizeSpy) Canonicalize(spec WorkspaceSpec) (WorkspaceSpec, error) {
+	s.calls++
+	return s.Workspace.Canonicalize(spec)
 }
 
 func TestSessionListPreservesParentRelationship(t *testing.T) {
@@ -341,6 +556,15 @@ type checkpointWorkspace struct {
 	paths []string
 	files []FileSnapshot
 }
+
+func (*checkpointWorkspace) Spec() WorkspaceSpec {
+	return WorkspaceSpec{PrimaryRoot: "/work", CWD: "/work", Roots: []WorkspaceRootSpec{{Path: "/work", Access: WorkspaceAccessReadWrite}}}
+}
+func (*checkpointWorkspace) Validate(WorkspaceSpec) error { return nil }
+func (*checkpointWorkspace) Canonicalize(spec WorkspaceSpec) (WorkspaceSpec, error) {
+	return spec, nil
+}
+func (*checkpointWorkspace) Activate(WorkspaceSpec) error { return nil }
 
 func (w *checkpointWorkspace) Capture(paths []string) ([]FileSnapshot, error) {
 	w.paths = append([]string(nil), paths...)

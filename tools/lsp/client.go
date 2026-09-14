@@ -46,25 +46,45 @@ type client struct {
 	err         error
 }
 
-type Manager struct {
-	root    string
-	clients []*client
+type WorkspaceContext interface {
+	GetCWD() string
+	ResolvePath(string) (string, error)
+	CanRead(string) bool
 }
 
-func Connect(ctx context.Context, root string, configs []ServerConfig) (*Manager, error) {
-	manager := &Manager{root: root}
+type Manager struct {
+	mu        sync.RWMutex
+	workspace WorkspaceContext
+	root      string
+	configs   []ServerConfig
+	clients   []*client
+}
+
+func Connect(ctx context.Context, workspace WorkspaceContext, configs []ServerConfig) (*Manager, error) {
+	manager := &Manager{workspace: workspace, configs: append([]ServerConfig(nil), configs...)}
+	clients, err := connectClients(ctx, manager.configs, workspace.GetCWD())
+	if err != nil {
+		return nil, err
+	}
+	manager.root = workspace.GetCWD()
+	manager.clients = clients
+	return manager, nil
+}
+
+func connectClients(ctx context.Context, configs []ServerConfig, root string) ([]*client, error) {
+	clients := make([]*client, 0, len(configs))
 	for _, config := range configs {
-		if config.Root == "" {
-			config.Root = root
-		}
-		client, err := start(ctx, config)
+		config.Root = root
+		connected, err := start(ctx, config)
 		if err != nil {
-			_ = manager.Close()
+			for _, client := range clients {
+				_ = client.Close()
+			}
 			return nil, fmt.Errorf("connect LSP %s: %w", config.Name, err)
 		}
-		manager.clients = append(manager.clients, client)
+		clients = append(clients, connected)
 	}
-	return manager, nil
+	return clients, nil
 }
 
 func start(ctx context.Context, config ServerConfig) (*client, error) {
@@ -229,15 +249,19 @@ func (c *client) Close() error {
 }
 
 func (m *Manager) Close() error {
+	m.mu.Lock()
+	clients := m.clients
+	m.clients = nil
+	m.mu.Unlock()
 	var result error
-	for _, client := range m.clients {
+	for _, client := range clients {
 		result = errors.Join(result, client.Close())
 	}
 	return result
 }
 
 func (m *Manager) Tools() []Tool {
-	if len(m.clients) == 0 {
+	if len(m.configs) == 0 {
 		return nil
 	}
 	names := []string{"lsp_diagnostics", "lsp_symbols", "lsp_definition", "lsp_references", "lsp_outline"}
@@ -248,17 +272,45 @@ func (m *Manager) Tools() []Tool {
 	return result
 }
 
-func (m *Manager) clientFor(path string) (*client, string, error) {
-	absolute, err := filepath.Abs(filepath.Join(m.root, path))
+func (m *Manager) ensureWorkspace(ctx context.Context) error {
+	desired := m.workspace.GetCWD()
+	m.mu.RLock()
+	current := m.root
+	m.mu.RUnlock()
+	if desired == current {
+		return nil
+	}
+	clients, err := connectClients(ctx, m.configs, desired)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	old := m.clients
+	m.clients = clients
+	m.root = desired
+	m.mu.Unlock()
+	for _, client := range old {
+		_ = client.Close()
+	}
+	return nil
+}
+
+func (m *Manager) clientsSnapshot() []*client {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return append([]*client(nil), m.clients...)
+}
+
+func (m *Manager) clientFor(clients []*client, path string) (*client, string, error) {
+	absolute, err := m.workspace.ResolvePath(path)
 	if err != nil {
 		return nil, "", err
 	}
-	relative, err := filepath.Rel(m.root, absolute)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-		return nil, "", errors.New("path escapes workspace")
+	if !m.workspace.CanRead(absolute) {
+		return nil, "", errors.New("path is outside readable workspace roots")
 	}
 	extension := strings.TrimPrefix(filepath.Ext(absolute), ".")
-	for _, client := range m.clients {
+	for _, client := range clients {
 		for _, supported := range client.config.Extensions {
 			if strings.TrimPrefix(supported, ".") == extension {
 				return client, absolute, nil
@@ -302,14 +354,18 @@ func (t Tool) Run(ctx context.Context, call protocol.ToolCall) (string, error) {
 	if err := json.Unmarshal([]byte(call.Input), &input); err != nil {
 		return "", err
 	}
+	if err := t.manager.ensureWorkspace(ctx); err != nil {
+		return "", err
+	}
+	clients := t.manager.clientsSnapshot()
 	if t.name == "lsp_symbols" {
-		if len(t.manager.clients) == 0 {
+		if len(clients) == 0 {
 			return "", errors.New("no LSP servers configured")
 		}
-		result, err := t.manager.clients[0].request(ctx, "workspace/symbol", map[string]any{"query": input.Query})
+		result, err := clients[0].request(ctx, "workspace/symbol", map[string]any{"query": input.Query})
 		return pretty(result), err
 	}
-	client, path, err := t.manager.clientFor(input.Path)
+	client, path, err := t.manager.clientFor(clients, input.Path)
 	if err != nil {
 		return "", err
 	}

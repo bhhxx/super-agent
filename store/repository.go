@@ -22,6 +22,9 @@ func (r Repository) Create(meta session.Metadata, messages []protocol.Message) (
 		CWD:                meta.CWD,
 		InstructionSources: meta.InstructionSources,
 		ParentID:           SessionID(meta.ParentID),
+		ProjectID:          meta.ProjectID,
+		ConfigRoot:         meta.ConfigRoot,
+		Workspace:          toStoreWorkspaceSpec(meta.WorkspaceSpec),
 	}, messages)
 	if err != nil {
 		return session.Metadata{}, err
@@ -187,6 +190,32 @@ func (r Repository) TruncateAfter(id session.SessionID, index int) error {
 func (r Repository) LoadMemory() ([]string, error)   { return r.store.LoadMemory() }
 func (r Repository) SaveMemory(items []string) error { return r.store.SaveMemory(items) }
 
+func (r Repository) SaveWorkspaceDescription(id session.SessionID, spec session.WorkspaceSpec) error {
+	return r.store.SaveWorkspaceDescription(SessionID(id), *toStoreWorkspaceSpec(&spec))
+}
+
 func toSessionMetadata(meta Metadata) session.Metadata {
-	return session.Metadata{ID: session.SessionID(meta.ID), Title: meta.Title, Provider: meta.Provider, Model: meta.Model, CWD: meta.CWD, InstructionSources: meta.InstructionSources, ParentID: session.SessionID(meta.ParentID)}
+	return session.Metadata{ID: session.SessionID(meta.ID), Title: meta.Title, Provider: meta.Provider, Model: meta.Model, CWD: meta.CWD, InstructionSources: meta.InstructionSources, ParentID: session.SessionID(meta.ParentID), ProjectID: meta.ProjectID, ConfigRoot: meta.ConfigRoot, WorkspaceSpec: toSessionWorkspaceSpec(meta.Workspace)}
+}
+
+func toStoreWorkspaceSpec(spec *session.WorkspaceSpec) *WorkspaceSpec {
+	if spec == nil {
+		return nil
+	}
+	roots := make([]WorkspaceRootSpec, len(spec.Roots))
+	for i, root := range spec.Roots {
+		roots[i] = WorkspaceRootSpec{Path: root.Path, Access: string(root.Access)}
+	}
+	return &WorkspaceSpec{PrimaryRoot: spec.PrimaryRoot, CWD: spec.CWD, Roots: roots}
+}
+
+func toSessionWorkspaceSpec(spec *WorkspaceSpec) *session.WorkspaceSpec {
+	if spec == nil {
+		return nil
+	}
+	roots := make([]session.WorkspaceRootSpec, len(spec.Roots))
+	for i, root := range spec.Roots {
+		roots[i] = session.WorkspaceRootSpec{Path: root.Path, Access: session.WorkspaceAccessMode(root.Access)}
+	}
+	return &session.WorkspaceSpec{PrimaryRoot: spec.PrimaryRoot, CWD: spec.CWD, Roots: roots}
 }

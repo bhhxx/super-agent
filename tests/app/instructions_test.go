@@ -9,6 +9,7 @@ import (
 	. "super-agent/app"
 	"super-agent/app/instructions"
 	"super-agent/runtime"
+	"super-agent/workspace"
 )
 
 func TestLoadProjectInstructionsMergesRootToLeaf(t *testing.T) {
@@ -167,8 +168,10 @@ func TestNewSessionInjectsSystemPrompt(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(old) })
 
 	session, err := NewSession(Config{
-		Provider: "deepseek",
-		NoTools:  true,
+		Provider:   "deepseek",
+		NoTools:    true,
+		Workspace:  mustWorkspaceContext(t, dir),
+		ConfigRoot: dir,
 	})
 	if err != nil {
 		t.Fatalf("NewSession failed: %v", err)
@@ -190,7 +193,7 @@ func TestAgentControllerSwitchesPlanAndBuildProfiles(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	t.Chdir(dir)
-	cfg := Config{Provider: "deepseek", NoTools: true, PermissionMode: runtime.PermissionModeAsk}
+	cfg := Config{Provider: "deepseek", NoTools: true, PermissionMode: runtime.PermissionModeAsk, Workspace: mustWorkspaceContext(t, dir), ConfigRoot: dir}
 	session, _, agents, err := NewSessionWithExtensions(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -210,13 +213,51 @@ func TestAgentControllerSwitchesPlanAndBuildProfiles(t *testing.T) {
 	}
 }
 
+func TestSessionLoadsInstructionsFromConfigRootNotWorkspaceAccessRoot(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	configRoot := t.TempDir()
+	accessRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(configRoot, "AGENTS.md"), []byte("trusted project instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(accessRoot, "AGENTS.md"), []byte("untrusted access-root instructions"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspaceContext, err := workspace.NewDefaultContext(accessRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, _, err := NewSessionWithExtensions(Config{
+		Provider: "deepseek", NoTools: true, PermissionMode: runtime.PermissionModeAsk,
+		Workspace: workspaceContext, ConfigRoot: configRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	content := session.Snapshot().Messages[0].Content
+	if !strings.Contains(content, "trusted project instructions") || strings.Contains(content, "untrusted access-root instructions") {
+		t.Fatalf("system instructions do not respect config/access separation: %q", content)
+	}
+}
+
 func TestConfiguredHooksRequireTools(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Chdir(t.TempDir())
-	_, _, _, err := NewSessionWithExtensions(Config{Provider: "deepseek", NoTools: true, Extensions: Extensions{Hooks: map[string][]string{"startup": {"true"}}}})
+	dir := t.TempDir()
+	_, _, _, err := NewSessionWithExtensions(Config{Provider: "deepseek", NoTools: true, Workspace: mustWorkspaceContext(t, dir), ConfigRoot: dir, Extensions: Extensions{Hooks: map[string][]string{"startup": {"true"}}}})
 	if err == nil || !strings.Contains(err.Error(), "hooks require tools") {
 		t.Fatalf("error = %v", err)
 	}
+}
+
+func mustWorkspaceContext(t *testing.T, root string) *workspace.Context {
+	t.Helper()
+	context, err := workspace.NewDefaultContext(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return context
 }
 
 func TestLoadEmptyAgentsFallsBackToClaudeMd(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	. "super-agent/runtime"
-	"super-agent/workspace"
 )
 
 func TestAttachedFileIsConsumedByNextUserMessage(t *testing.T) {
@@ -22,7 +21,7 @@ func TestAttachedFileIsConsumedByNextUserMessage(t *testing.T) {
 	if err := engine.Ready(); err != nil {
 		t.Fatal(err)
 	}
-	session := NewPersistentSession(engine, nil, workspace.Workspace{}, SessionMetadata{})
+	session := NewPersistentSession(engine, nil, configuredWorkspace(t, dir), SessionMetadata{})
 	attachment, err := session.Attach("note.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +45,7 @@ func TestAttachedFileIsConsumedByNextUserMessage(t *testing.T) {
 func TestAttachmentCannotEscapeWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
-	session := NewPersistentSession(NewEngineWithExecutor(&staticExecutor{}, nil), nil, workspace.Workspace{}, SessionMetadata{})
+	session := NewPersistentSession(NewEngineWithExecutor(&staticExecutor{}, nil), nil, configuredWorkspace(t, dir), SessionMetadata{})
 	if _, err := session.Attach("../outside.txt"); err == nil {
 		t.Fatal("outside attachment accepted")
 	}

@@ -3,15 +3,17 @@ package tools_test
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"super-agent/runtime"
 	. "super-agent/tools"
+	"super-agent/workspace"
 )
 
 func TestDefaultRegistryExposesSecondPriorityTools(t *testing.T) {
-	specs := DefaultRegistry().Specs()
+	specs := DefaultRegistry(testWorkspace(t)).Specs()
 	names := map[string]bool{}
 	for _, spec := range specs {
 		names[spec.Name] = true
@@ -27,7 +29,7 @@ func TestRunCommandUsesWorkspaceCWDAndTruncatesOutput(t *testing.T) {
 	t.Chdir(t.TempDir())
 	mustWrite(t, "nested/name.txt", "hello")
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "run_command",
 		Input: `{"command":"printf \"%s:\" \"$(basename \"$PWD\")\" && cat name.txt && printf abcdefghijklmnopqrstuvwxyz","cwd":"nested","max_output_bytes":20}`,
 	})
@@ -42,12 +44,32 @@ func TestRunCommandUsesWorkspaceCWDAndTruncatesOutput(t *testing.T) {
 func TestRunCommandRejectsCWDOutsideWorkspace(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	_, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	_, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "run_command",
 		Input: `{"command":"pwd","cwd":".."}`,
 	})
-	if err == nil || !strings.Contains(err.Error(), "outside working directory") {
-		t.Fatalf("err = %v, want outside working directory", err)
+	if err == nil || !strings.Contains(err.Error(), "outside readable workspace roots") {
+		t.Fatalf("err = %v, want workspace rejection", err)
+	}
+}
+
+func TestRunCommandDefaultsToInjectedWorkspaceCWD(t *testing.T) {
+	processCWD := t.TempDir()
+	t.Chdir(processCWD)
+	root := t.TempDir()
+	workspaceContext, err := workspace.NewDefaultContext(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := RegistryForWorkspace(workspaceContext).Run(context.Background(), runtime.ToolCall{
+		Name: "run_command", Input: `{"command":"pwd"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalRoot, _ := filepath.EvalSymlinks(root)
+	if strings.TrimSpace(got) != canonicalRoot {
+		t.Fatalf("pwd = %q, want injected workspace cwd %q", strings.TrimSpace(got), canonicalRoot)
 	}
 }
 
@@ -56,7 +78,7 @@ func TestGoTestRunsPackages(t *testing.T) {
 	mustWrite(t, "go.mod", "module example.com/x\n\ngo 1.24\n")
 	mustWrite(t, "main.go", "package main\n")
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "go_test",
 		Input: `{"packages":["./..."]}`,
 	})
@@ -72,7 +94,7 @@ func TestFormatRunsGofmtOnWorkspaceFiles(t *testing.T) {
 	t.Chdir(t.TempDir())
 	mustWrite(t, "main.go", "package main\nfunc main(){println(\"hi\")}\n")
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "format",
 		Input: `{"files":["main.go"]}`,
 	})
@@ -95,7 +117,7 @@ func TestGitStatusAndDiffAreReadOnly(t *testing.T) {
 	mustWrite(t, "tracked.txt", "after\n")
 	mustWrite(t, "new.txt", "new\n")
 
-	status, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	status, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "git_status",
 		Input: `{}`,
 	})
@@ -106,7 +128,7 @@ func TestGitStatusAndDiffAreReadOnly(t *testing.T) {
 		t.Fatalf("status = %q, want tracked and untracked files", status)
 	}
 
-	diff, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	diff, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "git_diff",
 		Input: `{"paths":["tracked.txt"]}`,
 	})

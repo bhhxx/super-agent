@@ -30,6 +30,7 @@ type subagentTool struct {
 	sandbox    tools.SandboxConfig
 	rules      runtime.PermissionRules
 	base       string
+	workspace  *workspace.Workspace
 	sequence   *atomic.Uint64
 }
 
@@ -95,12 +96,18 @@ func (t *subagentTool) Run(ctx context.Context, call runtime.ToolCall) (string, 
 	}
 	sandbox := t.sandbox
 	sandbox.Workspace = cwd
-	registry, err := tools.SandboxedRegistry(sandbox)
+	childWorkspace, err := workspace.NewDefaultContext(cwd)
+	if err != nil {
+		return "", err
+	}
+	childWorkspaceRuntime := workspace.New(childWorkspace)
+	registry, err := tools.SandboxedRegistry(sandbox, childWorkspaceRuntime)
 	if err != nil {
 		return "", err
 	}
 	childDelegate := *t
 	childDelegate.base = cwd
+	childDelegate.workspace = childWorkspaceRuntime
 	if err := registry.Add(&childDelegate); err != nil {
 		return "", err
 	}
@@ -110,9 +117,11 @@ func (t *subagentTool) Run(ctx context.Context, call runtime.ToolCall) (string, 
 	if err := engine.Ready(); err != nil {
 		return "", err
 	}
-	child, err := runtime.CreatePersistentSession(engine, t.repository, workspace.Workspace{}, runtime.SessionMetadata{
+	parentMeta := t.parent.Metadata()
+	child, err := runtime.CreatePersistentSession(engine, t.repository, childWorkspaceRuntime, runtime.SessionMetadata{
 		ParentID: t.parent.Metadata().ID, Provider: profile.Provider, Model: profile.Model, CWD: cwd,
 		Title: "subagent: " + truncate(input.Prompt, 48), InstructionSources: instructionSourcePaths(bundle),
+		ProjectID: parentMeta.ProjectID, ConfigRoot: cwd,
 	}, initial)
 	if err != nil {
 		return "", err
@@ -143,13 +152,22 @@ func (t *subagentTool) Run(ctx context.Context, call runtime.ToolCall) (string, 
 
 func (t *subagentTool) createWorktree(ctx context.Context) (string, error) {
 	id := fmt.Sprintf("%d-%d", time.Now().UnixNano(), t.sequence.Add(1))
-	path := filepath.Join(t.base, ".super-agent", "worktrees", id)
+	if t.workspace == nil {
+		return "", errors.New("workspace context is required")
+	}
+	path, err := t.workspace.ResolvePath(filepath.Join(".super-agent", "worktrees", id))
+	if err != nil {
+		return "", err
+	}
+	if !t.workspace.CanWrite(path) {
+		return "", errors.New("worktree path is outside writable workspace roots")
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
 	command := fmt.Sprintf("git worktree add --detach %q HEAD", path)
 	input, _ := json.Marshal(map[string]any{"command": command, "cwd": t.base, "timeout_seconds": 60})
-	registry, err := tools.SandboxedRegistry(t.sandbox)
+	registry, err := tools.SandboxedRegistry(t.sandbox, t.workspace)
 	if err != nil {
 		return "", err
 	}

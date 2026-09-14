@@ -128,8 +128,13 @@ Defaults to `~/.superagent/telemetry.jsonl`. Records and their fields are descri
 
 ## Flags and Environment
 
+`--cwd <directory>` explicitly selects the project directory. Relative values are resolved from the
+process cwd. Without it, project resolution walks upward from the process cwd looking for `.git` and
+falls back to that cwd. The resolved project root becomes the initial workspace primary root and cwd.
+
 | Switch | Effect |
 |---|---|
+| `--cwd <directory>` | Select the project directory explicitly |
 | `--yolo` | Auto-approve tools; maps to `bypass` |
 | `--no-tools` | Disable tool calling |
 | `--approval-mode <ask\|accept-edits\|plan\|bypass>` | Set the permission mode |

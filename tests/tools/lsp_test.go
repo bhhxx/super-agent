@@ -14,6 +14,7 @@ import (
 
 	"super-agent/runtime/protocol"
 	lsptools "super-agent/tools/lsp"
+	"super-agent/workspace"
 )
 
 func TestLSPToolsQueryConfiguredServer(t *testing.T) {
@@ -27,7 +28,11 @@ func TestLSPToolsQueryConfiguredServer(t *testing.T) {
 	if err := os.WriteFile(path, []byte("package main\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	manager, err := lsptools.Connect(context.Background(), root, []lsptools.ServerConfig{{
+	workspaceContext, err := workspace.NewDefaultContext(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := lsptools.Connect(context.Background(), workspaceContext, []lsptools.ServerConfig{{
 		Name: "fake", Command: os.Args[0], Args: []string{"-test.run=TestLSPToolsQueryConfiguredServer"}, Extensions: []string{"go"}, LanguageID: "go", Root: root,
 	}})
 	if err != nil {

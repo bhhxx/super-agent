@@ -12,6 +12,7 @@ import (
 
 	"super-agent/runtime"
 	. "super-agent/tools"
+	workspaceadapter "super-agent/workspace"
 )
 
 // maxOutputBytes is the ceiling run_command applies to a model-supplied
@@ -30,12 +31,12 @@ func TestReadFileRejectsSymlinkEscape(t *testing.T) {
 
 	// A lexical containment check accepts "link/secret.txt" because the relative
 	// path contains no "..". Resolving the symlink first is what rejects it.
-	_, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	_, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "read_file",
 		Input: `{"path":"link/secret.txt"}`,
 	})
-	if err == nil || !strings.Contains(err.Error(), "outside working directory") {
-		t.Fatalf("err = %v, want outside working directory", err)
+	if err == nil || !strings.Contains(err.Error(), "outside readable workspace roots") {
+		t.Fatalf("err = %v, want workspace rejection", err)
 	}
 }
 
@@ -46,12 +47,12 @@ func TestWriteFileRejectsSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	_, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "write_file",
 		Input: `{"path":"link/planted.txt","content":"owned"}`,
 	})
-	if err == nil || !strings.Contains(err.Error(), "outside working directory") {
-		t.Fatalf("err = %v, want outside working directory", err)
+	if err == nil || !strings.Contains(err.Error(), "outside writable workspace roots") {
+		t.Fatalf("err = %v, want workspace rejection", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(outside, "planted.txt")); statErr == nil {
 		t.Fatal("write escaped the workspace through the symlink")
@@ -63,7 +64,7 @@ func TestRunCommandCapsRequestedOutputLimit(t *testing.T) {
 
 	// The model asks for a 100 MB limit. Without a ceiling the command's entire
 	// output is buffered in memory.
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "run_command",
 		Input: `{"command":"head -c 400000 /dev/zero | tr '\\0' 'a'","max_output_bytes":100000000}`,
 	})
@@ -81,7 +82,7 @@ func TestRunCommandCapsRequestedOutputLimit(t *testing.T) {
 func TestBashTruncatesOutput(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "bash",
 		Input: `{"command":"head -c 400000 /dev/zero | tr '\\0' 'a'"}`,
 	})
@@ -97,7 +98,7 @@ func TestRunCommandHidesCredentialEnvironment(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("SUPER_AGENT_TEST_API_KEY", "sk-secret-value")
 
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "run_command",
 		Input: `{"command":"printenv SUPER_AGENT_TEST_API_KEY || echo absent"}`,
 	})
@@ -117,7 +118,7 @@ func TestRunCommandKeepsOrdinaryEnvironment(t *testing.T) {
 	t.Setenv("SUPER_AGENT_TEST_PLAIN", "visible")
 
 	// Scrubbing must not be so aggressive that ordinary variables disappear.
-	got, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "run_command",
 		Input: `{"command":"printenv SUPER_AGENT_TEST_PLAIN"}`,
 	})
@@ -135,7 +136,7 @@ func TestRunCommandTimeoutKillsTheProcessTree(t *testing.T) {
 
 	// The backgrounded subshell outlives the foreground sleep. Killing only the
 	// direct child would orphan it, and it would create the marker afterwards.
-	_, err := DefaultRegistry().Run(context.Background(), runtime.ToolCall{
+	_, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "run_command",
 		Input: `{"command":"(sleep 3; touch ` + marker + `) & sleep 30","timeout_seconds":1}`,
 	})
@@ -154,7 +155,12 @@ func TestStrictSandboxRequiresBubblewrap(t *testing.T) {
 		t.Skip("bubblewrap is Linux-only")
 	}
 	t.Setenv("PATH", t.TempDir())
-	_, err := SandboxedRegistry(DefaultSandboxConfig(t.TempDir()))
+	root := t.TempDir()
+	workspaceContext, workspaceErr := workspaceadapter.NewDefaultContext(root)
+	if workspaceErr != nil {
+		t.Fatal(workspaceErr)
+	}
+	_, err := SandboxedRegistry(DefaultSandboxConfig(root), workspaceContext)
 	if err == nil || !strings.Contains(err.Error(), "requires bubblewrap") {
 		t.Fatalf("err = %v, want missing bubblewrap error", err)
 	}
@@ -172,7 +178,11 @@ func TestStrictSandboxRestrictsFilesystemNetworkAndResources(t *testing.T) {
 	config.MemoryBytes = 64 << 20
 	config.MaxProcesses = 17
 	config.MaxOpenFiles = 23
-	registry, err := SandboxedRegistry(config)
+	workspaceContext, workspaceErr := workspaceadapter.NewDefaultContext(workspace)
+	if workspaceErr != nil {
+		t.Fatal(workspaceErr)
+	}
+	registry, err := SandboxedRegistry(config, workspaceContext)
 	if err != nil {
 		t.Skipf("strict sandbox unavailable: %v", err)
 	}

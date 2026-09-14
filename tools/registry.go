@@ -142,31 +142,39 @@ func (r *Registry) SetCheckpointCallback(callback func(protocol.ToolCall) error)
 	r.checkpoint = callback
 }
 
-func DefaultRegistry() *Registry {
-	return registryWithRunner(nil)
+func DefaultRegistry(workspace WorkspaceContext) *Registry {
+	return registryWithRunner(nil, workspace)
 }
 
-func SandboxedRegistry(config SandboxConfig) (*Registry, error) {
-	runner, err := newCommandRunner(config)
+func RegistryForWorkspace(workspace WorkspaceContext) *Registry {
+	return DefaultRegistry(workspace)
+}
+
+func SandboxedRegistry(config SandboxConfig, workspace WorkspaceContext) (*Registry, error) {
+	if workspace == nil {
+		return nil, errors.New("workspace is not configured")
+	}
+	config.Workspace = workspace.GetPrimaryRoot()
+	runner, err := newCommandRunner(config, workspace)
 	if err != nil {
 		return nil, err
 	}
-	return registryWithRunner(runner), nil
+	return registryWithRunner(runner, workspace), nil
 }
 
-func registryWithRunner(runner *commandRunner) *Registry {
+func registryWithRunner(runner *commandRunner, workspace WorkspaceContext) *Registry {
 	return NewRegistry(
-		ReadFileTool{},
-		ListFilesTool{},
-		SearchTool{},
-		ApplyPatchTool{},
-		WriteFileTool{},
-		RunCommandTool{runner: runner},
-		GoTestTool{runner: runner},
-		FormatTool{runner: runner},
-		GitStatusTool{runner: runner},
-		GitDiffTool{runner: runner},
-		BashTool{runner: runner},
+		ReadFileTool{workspace: workspace},
+		ListFilesTool{workspace: workspace},
+		SearchTool{workspace: workspace},
+		ApplyPatchTool{workspace: workspace},
+		WriteFileTool{workspace: workspace},
+		RunCommandTool{runner: runner, workspace: workspace},
+		GoTestTool{runner: runner, workspace: workspace},
+		FormatTool{runner: runner, workspace: workspace},
+		GitStatusTool{runner: runner, workspace: workspace},
+		GitDiffTool{runner: runner, workspace: workspace},
+		BashTool{runner: runner, workspace: workspace},
 		WebSearchTool{},
 		BrowserFetchTool{},
 	)

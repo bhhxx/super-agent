@@ -17,11 +17,11 @@ import (
 
 const maxToolOutputLines = 200
 
-type ReadFileTool struct{}
-type ListFilesTool struct{}
-type SearchTool struct{}
-type ApplyPatchTool struct{}
-type WriteFileTool struct{}
+type ReadFileTool struct{ workspace WorkspaceContext }
+type ListFilesTool struct{ workspace WorkspaceContext }
+type SearchTool struct{ workspace WorkspaceContext }
+type ApplyPatchTool struct{ workspace WorkspaceContext }
+type WriteFileTool struct{ workspace WorkspaceContext }
 
 func (ReadFileTool) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{
@@ -35,7 +35,7 @@ func (ReadFileTool) Spec() protocol.ToolSpec {
 	}
 }
 
-func (ReadFileTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
+func (t ReadFileTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
 	var args struct {
 		Path      string `json:"path"`
 		StartLine int    `json:"start_line"`
@@ -44,7 +44,7 @@ func (ReadFileTool) Run(_ context.Context, call protocol.ToolCall) (string, erro
 	if err := decodeArgs(call.Input, &args); err != nil {
 		return "", err
 	}
-	path, rel, err := workspacePath(args.Path)
+	path, rel, err := resolveReadable(t.workspace, args.Path)
 	if err != nil {
 		return "", err
 	}
@@ -69,7 +69,7 @@ func (ListFilesTool) Spec() protocol.ToolSpec {
 	}
 }
 
-func (ListFilesTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
+func (t ListFilesTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
 	var args struct {
 		Path    string `json:"path"`
 		Pattern string `json:"pattern"`
@@ -82,11 +82,11 @@ func (ListFilesTool) Run(_ context.Context, call protocol.ToolCall) (string, err
 	if args.Path == "" {
 		args.Path = "."
 	}
-	root, _, err := workspacePath(args.Path)
+	root, _, err := resolveReadable(t.workspace, args.Path)
 	if err != nil {
 		return "", err
 	}
-	files, err := collectFiles(root, args.Pattern)
+	files, err := collectFiles(t.workspace, root, args.Pattern)
 	if err != nil {
 		return "", err
 	}
@@ -104,7 +104,7 @@ func (SearchTool) Spec() protocol.ToolSpec {
 	}
 }
 
-func (SearchTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
+func (t SearchTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
 	var args struct {
 		Query string `json:"query"`
 		Path  string `json:"path"`
@@ -122,11 +122,11 @@ func (SearchTool) Run(_ context.Context, call protocol.ToolCall) (string, error)
 	if err != nil {
 		return "", err
 	}
-	root, _, err := workspacePath(args.Path)
+	root, _, err := resolveReadable(t.workspace, args.Path)
 	if err != nil {
 		return "", err
 	}
-	matches, err := searchFiles(root, re)
+	matches, err := searchFiles(t.workspace, root, re)
 	if err != nil {
 		return "", err
 	}
@@ -147,7 +147,7 @@ func (ApplyPatchTool) Spec() protocol.ToolSpec {
 	}
 }
 
-func (ApplyPatchTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
+func (t ApplyPatchTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
 	var args struct {
 		Path       string `json:"path"`
 		OldText    string `json:"old_text"`
@@ -157,7 +157,7 @@ func (ApplyPatchTool) Run(_ context.Context, call protocol.ToolCall) (string, er
 	if err := decodeArgs(call.Input, &args); err != nil {
 		return "", err
 	}
-	path, rel, err := workspacePath(args.Path)
+	path, rel, err := resolveWritable(t.workspace, args.Path)
 	if err != nil {
 		return "", err
 	}
@@ -192,7 +192,7 @@ func (WriteFileTool) Spec() protocol.ToolSpec {
 	}
 }
 
-func (WriteFileTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
+func (t WriteFileTool) Run(_ context.Context, call protocol.ToolCall) (string, error) {
 	var args struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -200,7 +200,7 @@ func (WriteFileTool) Run(_ context.Context, call protocol.ToolCall) (string, err
 	if err := decodeArgs(call.Input, &args); err != nil {
 		return "", err
 	}
-	path, rel, err := workspacePath(args.Path)
+	path, rel, err := resolveWritable(t.workspace, args.Path)
 	if err != nil {
 		return "", err
 	}
@@ -231,64 +231,6 @@ func objectSchema(properties map[string]any, required []string) map[string]any {
 	return schema
 }
 
-func workspacePath(path string) (string, string, error) {
-	if path == "" {
-		return "", "", errors.New("path is required")
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", "", err
-	}
-	cwd, err = resolveExisting(cwd)
-	if err != nil {
-		return "", "", err
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return "", "", err
-	}
-	// Resolve symlinks before the containment check. A purely lexical check
-	// accepts `link/passwd` when the workspace holds `link -> /etc`, which reads
-	// and writes outside the workspace.
-	resolved, err := resolveExisting(abs)
-	if err != nil {
-		return "", "", err
-	}
-	rel, err := filepath.Rel(cwd, resolved)
-	if err != nil {
-		return "", "", err
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", errors.New("path is outside working directory")
-	}
-	return resolved, filepath.ToSlash(rel), nil
-}
-
-// resolveExisting returns path with every symlink resolved.
-//
-// EvalSymlinks fails on a path that does not exist yet, which is the ordinary
-// case when write_file creates a new file, so the nearest existing ancestor is
-// resolved and the remaining components are re-appended to it.
-func resolveExisting(path string) (string, error) {
-	suffix := ""
-	current := path
-	for {
-		resolved, err := filepath.EvalSymlinks(current)
-		if err == nil {
-			return filepath.Join(resolved, suffix), nil
-		}
-		if !os.IsNotExist(err) {
-			return "", err
-		}
-		parent := filepath.Dir(current)
-		if parent == current {
-			return filepath.Join(current, suffix), nil
-		}
-		suffix = filepath.Join(filepath.Base(current), suffix)
-		current = parent
-	}
-}
-
 func numberedLines(content string, start, end int) string {
 	content = strings.TrimSuffix(content, "\n")
 	lines := strings.Split(content, "\n")
@@ -308,7 +250,7 @@ func numberedLines(content string, start, end int) string {
 	return strings.Join(limitLines(out), "\n")
 }
 
-func collectFiles(root, pattern string) ([]string, error) {
+func collectFiles(workspace WorkspaceContext, root, pattern string) ([]string, error) {
 	var files []string
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -320,7 +262,7 @@ func collectFiles(root, pattern string) ([]string, error) {
 			}
 			return nil
 		}
-		_, rel, err := workspacePath(path)
+		_, rel, err := resolveReadable(workspace, path)
 		if err != nil {
 			return err
 		}
@@ -337,14 +279,14 @@ func collectFiles(root, pattern string) ([]string, error) {
 	return files, err
 }
 
-func searchFiles(root string, re *regexp.Regexp) ([]string, error) {
-	files, err := collectFiles(root, "")
+func searchFiles(workspace WorkspaceContext, root string, re *regexp.Regexp) ([]string, error) {
+	files, err := collectFiles(workspace, root, "")
 	if err != nil {
 		return nil, err
 	}
 	var matches []string
 	for _, rel := range files {
-		path, _, err := workspacePath(rel)
+		path, _, err := resolveReadable(workspace, rel)
 		if err != nil {
 			return nil, err
 		}

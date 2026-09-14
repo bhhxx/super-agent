@@ -47,7 +47,8 @@ func TestBashToolsExposeOnlyBashTool(t *testing.T) {
 }
 
 func TestBashToolsRunCommand(t *testing.T) {
-	got, err := NewRegistry(BashTool{}).Run(context.Background(), runtime.ToolCall{
+	t.Chdir(t.TempDir())
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "bash",
 		Input: `{"command":"printf hello"}`,
 	})
@@ -60,7 +61,8 @@ func TestBashToolsRunCommand(t *testing.T) {
 }
 
 func TestBashToolsReturnsFailedCommandOutputWithoutError(t *testing.T) {
-	got, err := NewRegistry(BashTool{}).Run(context.Background(), runtime.ToolCall{
+	t.Chdir(t.TempDir())
+	got, err := DefaultRegistry(testWorkspace(t)).Run(context.Background(), runtime.ToolCall{
 		Name:  "bash",
 		Input: `{"command":"printf before; exit 7"}`,
 	})

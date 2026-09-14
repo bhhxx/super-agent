@@ -17,6 +17,7 @@ func main() {
 	autoApproveToolsFlag := flag.Bool("yolo", false, "Auto-approve tool execution") // 读取命令行参数
 	noToolsFlag := flag.Bool("no-tools", false, "Disable tool calling")
 	approvalModeFlag := flag.String("approval-mode", "", "Permission mode: ask, accept-edits, plan, bypass")
+	cwdFlag := flag.String("cwd", "", "Project directory (defaults to nearest Git root)")
 	flag.Parse()
 
 	_ = godotenv.Load() // 加载环境变量
@@ -25,6 +26,7 @@ func main() {
 		AutoApproveTools: *autoApproveToolsFlag,
 		NoTools:          *noToolsFlag,
 		PermissionMode:   *approvalModeFlag,
+		CWD:              *cwdFlag,
 	}, os.LookupEnv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -36,14 +38,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer session.Close()
-	cwd, _ := os.Getwd()
 	profile := agentController.Current()
 	if _, err := tea.NewProgram(tui.New(app.NewTUIConversation(session, mcpController, agentController), tui.StartupInfo{
 		ModelName:        llm.ModelDisplayName(profile.Provider, llm.ProviderConfig{Model: profile.Model}),
 		AutoApprove:      profile.PermissionMode == "bypass",
 		PermissionMode:   string(profile.PermissionMode),
 		NoTools:          cfg.NoTools,
-		CWD:              cwd,
+		CWD:              cfg.Workspace.GetCWD(),
 		InstructionPaths: cfg.InstructionSources,
 	})).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -84,6 +84,24 @@ func TestLoadConfigReadsCustomAgent(t *testing.T) {
 	}
 }
 
+func TestLoadConfigBuildsProjectAndWorkspaceFromExplicitDirectory(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	selected := t.TempDir()
+	processCWD := t.TempDir()
+	t.Chdir(processCWD)
+	cfg, err := LoadConfig(Flags{CWD: selected}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, _ := filepath.EvalSymlinks(selected)
+	if cfg.Project.Root != canonical || cfg.ConfigRoot != canonical {
+		t.Fatalf("project = %+v config root = %q, want %q", cfg.Project, cfg.ConfigRoot, canonical)
+	}
+	if cfg.Workspace.GetPrimaryRoot() != canonical || cfg.Workspace.GetCWD() != canonical || cfg.Sandbox.Workspace != canonical {
+		t.Fatalf("workspace context or sandbox not wired to %q", canonical)
+	}
+}
+
 func TestLoadConfigReadsLSPServers(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

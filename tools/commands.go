@@ -22,11 +22,26 @@ const (
 	maxOutputBytes = 200000
 )
 
-type RunCommandTool struct{ runner *commandRunner }
-type GoTestTool struct{ runner *commandRunner }
-type FormatTool struct{ runner *commandRunner }
-type GitStatusTool struct{ runner *commandRunner }
-type GitDiffTool struct{ runner *commandRunner }
+type RunCommandTool struct {
+	runner    *commandRunner
+	workspace WorkspaceContext
+}
+type GoTestTool struct {
+	runner    *commandRunner
+	workspace WorkspaceContext
+}
+type FormatTool struct {
+	runner    *commandRunner
+	workspace WorkspaceContext
+}
+type GitStatusTool struct {
+	runner    *commandRunner
+	workspace WorkspaceContext
+}
+type GitDiffTool struct {
+	runner    *commandRunner
+	workspace WorkspaceContext
+}
 
 func (RunCommandTool) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{
@@ -57,7 +72,7 @@ func (t RunCommandTool) Run(ctx context.Context, call protocol.ToolCall) (string
 	if args.Command == "" {
 		return "", errors.New("command is required")
 	}
-	cwd, err := commandCWD(args.CWD)
+	cwd, err := commandCWD(t.workspace, args.CWD)
 	if err != nil {
 		return "", err
 	}
@@ -96,7 +111,7 @@ func (t GoTestTool) Run(ctx context.Context, call protocol.ToolCall) (string, er
 	if len(args.Packages) == 0 {
 		args.Packages = []string{"./..."}
 	}
-	cwd, err := commandCWD(args.CWD)
+	cwd, err := commandCWD(t.workspace, args.CWD)
 	if err != nil {
 		return "", err
 	}
@@ -127,13 +142,17 @@ func (t FormatTool) Run(ctx context.Context, call protocol.ToolCall) (string, er
 	}
 	files := make([]string, 0, len(args.Files))
 	for _, file := range args.Files {
-		path, _, err := workspacePath(file)
+		path, _, err := resolveWritable(t.workspace, file)
 		if err != nil {
 			return "", err
 		}
 		files = append(files, path)
 	}
-	if _, err := runnerOrDefault(t.runner).runExec(ctx, "", defaultCommandTimeout, defaultOutputBytes, "gofmt", append([]string{"-w"}, files...)...); err != nil {
+	cwd, err := commandCWD(t.workspace, "")
+	if err != nil {
+		return "", err
+	}
+	if _, err := runnerOrDefault(t.runner).runExec(ctx, cwd, defaultCommandTimeout, defaultOutputBytes, "gofmt", append([]string{"-w"}, files...)...); err != nil {
 		return "", err
 	}
 	return "formatted " + strconv.Itoa(len(files)) + plural(len(files), " file", " files"), nil
@@ -154,7 +173,7 @@ func (t GitStatusTool) Run(ctx context.Context, call protocol.ToolCall) (string,
 			return "", errors.New("invalid JSON input")
 		}
 	}
-	cwd, err := commandCWD(".")
+	cwd, err := commandCWD(t.workspace, "")
 	if err != nil {
 		return "", err
 	}
@@ -182,24 +201,27 @@ func (t GitDiffTool) Run(ctx context.Context, call protocol.ToolCall) (string, e
 	}
 	cmdArgs := []string{"diff", "--"}
 	for _, path := range args.Paths {
-		_, rel, err := workspacePath(path)
+		_, rel, err := resolveReadable(t.workspace, path)
 		if err != nil {
 			return "", err
 		}
 		cmdArgs = append(cmdArgs, rel)
 	}
-	cwd, err := commandCWD(".")
+	cwd, err := commandCWD(t.workspace, "")
 	if err != nil {
 		return "", err
 	}
 	return runnerOrDefault(t.runner).runExec(ctx, cwd, defaultCommandTimeout, defaultOutputBytes, "git", cmdArgs...)
 }
 
-func commandCWD(cwd string) (string, error) {
-	if cwd == "" {
-		cwd = "."
+func commandCWD(workspace WorkspaceContext, cwd string) (string, error) {
+	if workspace == nil {
+		return "", errors.New("workspace is not configured")
 	}
-	path, _, err := workspacePath(cwd)
+	if cwd == "" {
+		cwd = workspace.GetCWD()
+	}
+	path, _, err := resolveReadable(workspace, cwd)
 	return path, err
 }
 
@@ -221,7 +243,11 @@ func (r *commandRunner) runExec(ctx context.Context, cwd string, timeout time.Du
 
 	if r.sandbox != nil {
 		var err error
-		name, args, cwd, err = r.sandbox.wrap(cwd, name, args)
+		workspaceRoot := ""
+		if r.workspace != nil {
+			workspaceRoot = r.workspace.GetPrimaryRoot()
+		}
+		name, args, cwd, err = r.sandbox.wrap(workspaceRoot, cwd, name, args)
 		if err != nil {
 			return "", err
 		}

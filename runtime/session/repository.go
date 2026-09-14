@@ -4,6 +4,26 @@ import "time"
 
 type SessionID string
 
+type WorkspaceAccessMode string
+
+const (
+	WorkspaceAccessRead      WorkspaceAccessMode = "read"
+	WorkspaceAccessReadWrite WorkspaceAccessMode = "read_write"
+)
+
+type WorkspaceRootSpec struct {
+	Path   string
+	Access WorkspaceAccessMode
+}
+
+// WorkspaceSpec is durable session data. Filesystem validation and access
+// decisions belong to the concrete Workspace implementation.
+type WorkspaceSpec struct {
+	PrimaryRoot string
+	CWD         string
+	Roots       []WorkspaceRootSpec
+}
+
 type Metadata struct {
 	ID                 SessionID
 	Title              string
@@ -12,6 +32,9 @@ type Metadata struct {
 	CWD                string
 	InstructionSources []string
 	ParentID           SessionID
+	ProjectID          string
+	ConfigRoot         string
+	WorkspaceSpec      *WorkspaceSpec
 }
 
 type Summary struct {
@@ -67,10 +90,21 @@ type Repository interface {
 	TruncateAfter(SessionID, int) error
 	LoadMemory() ([]string, error)
 	SaveMemory([]string) error
+	// SaveWorkspaceDescription persists the durable workspace description and
+	// its canonical cwd without touching unrelated metadata. Resume uses it to
+	// upgrade legacy metadata to canonical WorkspaceSpec form exactly once.
+	SaveWorkspaceDescription(SessionID, WorkspaceSpec) error
 }
 
 // Workspace is the outbound filesystem port used by checkpoints and undo.
 type Workspace interface {
+	Spec() WorkspaceSpec
+	Validate(WorkspaceSpec) error
+	// Canonicalize re-resolves every path in the spec against the current
+	// filesystem. Resume uses it once to upgrade legacy metadata, whose saved
+	// cwd never promised a canonical path; new specs stay strict.
+	Canonicalize(WorkspaceSpec) (WorkspaceSpec, error)
+	Activate(WorkspaceSpec) error
 	Capture([]string) ([]FileSnapshot, error)
 	Restore([]FileSnapshot) error
 }

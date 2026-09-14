@@ -9,7 +9,10 @@ import (
 	"super-agent/runtime/protocol"
 )
 
-type BashTool struct{ runner *commandRunner }
+type BashTool struct {
+	runner    *commandRunner
+	workspace WorkspaceContext
+}
 
 func (BashTool) Spec() protocol.ToolSpec {
 	return protocol.ToolSpec{
@@ -33,7 +36,11 @@ func (t BashTool) Run(ctx context.Context, call protocol.ToolCall) (string, erro
 	}
 	// Routed through runExec so this tool gets the same command timeout, output
 	// cap, process group, and environment scrubbing as every other command tool.
-	output, err := runnerOrDefault(t.runner).runExec(ctx, "", defaultCommandTimeout, defaultOutputBytes, "bash", "-lc", command)
+	cwd, err := commandCWD(t.workspace, "")
+	if err != nil {
+		return "", err
+	}
+	output, err := runnerOrDefault(t.runner).runExec(ctx, cwd, defaultCommandTimeout, defaultOutputBytes, "bash", "-lc", command)
 	if err == nil {
 		return output, nil
 	}

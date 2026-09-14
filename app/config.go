@@ -10,16 +10,19 @@ import (
 
 	"super-agent/app/instructions"
 	"super-agent/llm"
+	"super-agent/project"
 	"super-agent/runtime"
 	"super-agent/tools"
 	lsptools "super-agent/tools/lsp"
 	mcptools "super-agent/tools/mcp"
+	workspaceadapter "super-agent/workspace"
 )
 
 type Flags struct {
 	AutoApproveTools bool
 	NoTools          bool
 	PermissionMode   string
+	CWD              string
 }
 
 type Config struct {
@@ -38,6 +41,9 @@ type Config struct {
 	Agent              string
 	Extensions         Extensions
 	TelemetryPath      string
+	Project            project.Project
+	Workspace          *workspaceadapter.Context
+	ConfigRoot         string
 }
 
 type Settings struct {
@@ -148,10 +154,19 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 		return Config{}, err
 	}
 	provider := settings.Provider
-	cwd, err := os.Getwd()
+	processCWD, err := os.Getwd()
 	if err != nil {
 		return Config{}, err
 	}
+	selectedProject, err := project.Resolve(flags.CWD, processCWD)
+	if err != nil {
+		return Config{}, err
+	}
+	workspaceContext, err := workspaceadapter.NewDefaultContext(selectedProject.Root)
+	if err != nil {
+		return Config{}, err
+	}
+	cwd := workspaceContext.GetCWD()
 	telemetryPath := settings.Telemetry.LogPath
 	if telemetryPath == "" {
 		home, homeErr := os.UserHomeDir()
@@ -244,6 +259,9 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 		Agent:              firstNonEmpty(settings.Agent, "build"),
 		Extensions:         extensions,
 		TelemetryPath:      telemetryPath,
+		Project:            selectedProject,
+		Workspace:          workspaceContext,
+		ConfigRoot:         selectedProject.Root,
 	}, nil
 }
 

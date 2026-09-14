@@ -20,7 +20,7 @@ func TestBrowserRejectsPrivateAndNonHTTPAddresses(t *testing.T) {
 }
 
 func TestWebToolsAreRiskyNetworkTools(t *testing.T) {
-	registry := DefaultRegistry()
+	registry := DefaultRegistry(testWorkspace(t))
 	seen := map[string]bool{}
 	for _, spec := range registry.Specs() {
 		if spec.Name == "web_search" || spec.Name == "browser_fetch" {

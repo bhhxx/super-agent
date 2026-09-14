@@ -2,7 +2,6 @@ package tools
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -40,16 +39,17 @@ func ValidSandboxMode(mode SandboxMode) bool {
 }
 
 type commandSandbox interface {
-	wrap(cwd, name string, args []string) (string, []string, string, error)
+	wrap(workspaceRoot, cwd, name string, args []string) (string, []string, string, error)
 }
 
 type commandRunner struct {
-	sandbox commandSandbox
+	sandbox   commandSandbox
+	workspace WorkspaceContext
 }
 
 var directCommandRunner = &commandRunner{}
 
-func newCommandRunner(config SandboxConfig) (*commandRunner, error) {
+func newCommandRunner(config SandboxConfig, workspaceContext WorkspaceContext) (*commandRunner, error) {
 	if config.Mode == "" {
 		config.Mode = SandboxModeStrict
 	}
@@ -57,14 +57,10 @@ func newCommandRunner(config SandboxConfig) (*commandRunner, error) {
 		return nil, errors.New("invalid sandbox mode: " + string(config.Mode))
 	}
 	if config.Mode == SandboxModeOff {
-		return &commandRunner{}, nil
+		return &commandRunner{workspace: workspaceContext}, nil
 	}
 	if config.Workspace == "" {
-		var err error
-		config.Workspace, err = os.Getwd()
-		if err != nil {
-			return nil, err
-		}
+		return nil, errors.New("strict sandbox requires a workspace")
 	}
 	workspace, err := filepath.Abs(config.Workspace)
 	if err != nil {
@@ -91,7 +87,7 @@ func newCommandRunner(config SandboxConfig) (*commandRunner, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &commandRunner{sandbox: sandbox}, nil
+	return &commandRunner{sandbox: sandbox, workspace: workspaceContext}, nil
 }
 
 func runnerOrDefault(runner *commandRunner) *commandRunner {

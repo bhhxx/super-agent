@@ -25,6 +25,14 @@ type SessionMetadata = session.Metadata
 type SessionRepository = session.Repository
 type SessionWorkspace = session.Workspace
 type FileSnapshot = session.FileSnapshot
+type WorkspaceAccessMode = session.WorkspaceAccessMode
+type WorkspaceRootSpec = session.WorkspaceRootSpec
+type WorkspaceSpec = session.WorkspaceSpec
+
+const (
+	WorkspaceAccessRead      = session.WorkspaceAccessRead
+	WorkspaceAccessReadWrite = session.WorkspaceAccessReadWrite
+)
 
 func NewSession(engine *Engine) *Session { return session.NewSession(engine) }
 func NewPersistentSession(engine *Engine, repository SessionRepository, workspace SessionWorkspace, meta SessionMetadata) *Session {
