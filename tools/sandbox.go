@@ -49,6 +49,16 @@ type commandRunner struct {
 
 var directCommandRunner = &commandRunner{}
 
+// runnerOrDefault falls back to the unsandboxed direct runner. Production
+// registries are built through SandboxedRegistry, which always supplies a
+// runner; the fallback exists for tests that construct bare tool values.
+func runnerOrDefault(runner *commandRunner) *commandRunner {
+	if runner == nil {
+		return directCommandRunner
+	}
+	return runner
+}
+
 func newCommandRunner(config SandboxConfig, workspaceContext WorkspaceContext) (*commandRunner, error) {
 	if config.Mode == "" {
 		config.Mode = SandboxModeStrict
@@ -88,11 +98,4 @@ func newCommandRunner(config SandboxConfig, workspaceContext WorkspaceContext) (
 		return nil, err
 	}
 	return &commandRunner{sandbox: sandbox, workspace: workspaceContext}, nil
-}
-
-func runnerOrDefault(runner *commandRunner) *commandRunner {
-	if runner == nil {
-		return directCommandRunner
-	}
-	return runner
 }

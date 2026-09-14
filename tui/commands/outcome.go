@@ -7,7 +7,6 @@ package commands
 type StatusBar struct {
 	ModelName      string
 	PermissionMode string
-	AutoApprove    bool
 }
 
 // Outcome is a command's request to the root. Every field is a separate,

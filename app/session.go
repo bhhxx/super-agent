@@ -145,9 +145,6 @@ func NewSessionWithExtensions(cfg Config) (*runtime.Session, *MCPController, *Ag
 		initial = append(initial, memory)
 	}
 	engine := runtime.NewEngineWithExecutorAndPolicy(runtime.NewDefaultScheduledActionExecutor(router, toolRunner), runtime.NewPolicy(profile.PermissionMode, cfg.PermissionRules), initial)
-	if cfg.AutoApproveTools {
-		engine.EnableAutoApproveTools()
-	}
 	if err := engine.Ready(); err != nil {
 		return nil, nil, nil, err
 	}
@@ -178,10 +175,6 @@ func NewSessionWithExtensions(cfg Config) (*runtime.Session, *MCPController, *Ag
 	}
 	session.AddCloser(closerFunc(telemetry.Close))
 	telemetryOwned = false
-	if lspCloser != nil {
-		session.AddCloser(lspCloser)
-		lspCloser = nil
-	}
 	workflows := &WorkflowController{registry: registry, extensions: cfg.Extensions}
 	if registry != nil {
 		registry.SetToolObserver(func(ctx context.Context, event string, _ runtime.ToolCall, _ error) error {
@@ -219,14 +212,17 @@ func settingsMap(configs []mcptools.ServerConfig) map[string]MCPServerSettings {
 	return result
 }
 
+// initialMessages loads the instruction bundle for cwd and merges it into the
+// system message. The bundle is returned so session metadata can record where
+// the instructions came from.
 func initialMessages(cwd string) ([]runtime.Message, instructions.Bundle, error) {
 	bundle, err := instructions.Load(cwd)
 	if err != nil {
 		return nil, instructions.Bundle{}, err
 	}
-	content := SystemPrompt // `:=` 是短变量声明，系统提示词
+	content := SystemPrompt
 	if bundle.Content != "" {
-		content += "\n\n" + bundle.Content // 拼接 AGENTS.md 这类系统提示词
+		content += "\n\n" + bundle.Content
 	}
 	return []runtime.Message{{Role: runtime.RoleSystem, Content: content}}, bundle, nil
 }

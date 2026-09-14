@@ -53,9 +53,6 @@ func TestLoadConfigCombinesFlagsEnvAndSettings(t *testing.T) {
 	if !cfg.NoTools {
 		t.Fatal("NoTools = false, want true")
 	}
-	if !cfg.AutoApproveTools {
-		t.Fatal("AutoApproveTools = false, want true")
-	}
 	if cfg.PermissionMode != "bypass" {
 		t.Fatalf("PermissionMode = %q, want bypass", cfg.PermissionMode)
 	}
@@ -71,7 +68,7 @@ func TestLoadConfigReadsCustomAgent(t *testing.T) {
 	if err := os.MkdirAll(settingsDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	settings := `{"provider":"deepseek","providers":{"deepseek":{"model":"reasoner"}},"agent":"reviewer","agents":{"reviewer":{"prompt":"Review only.","permission_mode":"plan"}}}`
+	settings := `{"provider":"deepseek","providers":{"deepseek":{"api_key":"deepseek-key","model":"reasoner"}},"agent":"reviewer","agents":{"reviewer":{"prompt":"Review only.","permission_mode":"plan"}}}`
 	if err := os.WriteFile(filepath.Join(settingsDir, "settings.json"), []byte(settings), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +83,10 @@ func TestLoadConfigReadsCustomAgent(t *testing.T) {
 
 func TestLoadConfigBuildsProjectAndWorkspaceFromExplicitDirectory(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// With no settings.json the default provider carries only a placeholder
+	// key, so the credential has to come from the environment: a provider with
+	// no usable credential fails at startup rather than on the first turn.
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 	selected := t.TempDir()
 	processCWD := t.TempDir()
 	t.Chdir(processCWD)
@@ -109,7 +110,7 @@ func TestLoadConfigReadsLSPServers(t *testing.T) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	settings := `{"provider":"deepseek","providers":{"deepseek":{}},"lsp_servers":{"go":{"command":"gopls","args":["serve"],"extensions":["go"],"language_id":"go"}}}`
+	settings := `{"provider":"deepseek","providers":{"deepseek":{"api_key":"deepseek-key"}},"lsp_servers":{"go":{"command":"gopls","args":["serve"],"extensions":["go"],"language_id":"go"}}}`
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(settings), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +145,7 @@ func TestLoadConfigCombinesSkillsCommandsAndPlugins(t *testing.T) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	settings := `{"provider":"deepseek","providers":{"deepseek":{}},"extensions":{"commands":{"explain":"Explain $ARGUMENTS"},"skills":["skill"],"plugins":["plugin"]}}`
+	settings := `{"provider":"deepseek","providers":{"deepseek":{"api_key":"deepseek-key"}},"extensions":{"commands":{"explain":"Explain $ARGUMENTS"},"skills":["skill"],"plugins":["plugin"]}}`
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(settings), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestLoadConfigRejectsInvalidPermissionMode(t *testing.T) {
 func TestLoadConfigCreatesDefaultSettingsWhenMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	cfg, err := LoadConfig(Flags{}, lookup(nil))
+	cfg, err := LoadConfig(Flags{}, lookup(map[string]string{"DEEPSEEK_API_KEY": "env-key"}))
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
@@ -211,8 +212,8 @@ func TestLoadConfigCreatesDefaultSettingsWhenMissing(t *testing.T) {
 	if cfg.ModelConfig.Model != "deepseek-reasoner" {
 		t.Fatalf("ModelConfig = %+v", cfg.ModelConfig)
 	}
-	if cfg.PermissionMode != "ask" || cfg.AutoApproveTools {
-		t.Fatalf("default permissions = mode %q, auto-approve %t; want ask, false", cfg.PermissionMode, cfg.AutoApproveTools)
+	if cfg.PermissionMode != "ask" {
+		t.Fatalf("default permissions = mode %q; want ask", cfg.PermissionMode)
 	}
 	if cfg.Sandbox.Mode != "strict" || cfg.Sandbox.AllowNetwork {
 		t.Fatalf("default sandbox = %+v, want strict with network denied", cfg.Sandbox)
@@ -347,15 +348,12 @@ func TestYOLOEnvDoesNotOverrideExplicitApprovalMode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	cfg, err := LoadConfig(Flags{PermissionMode: "ask"}, lookup(map[string]string{"YOLO": "true"}))
+	cfg, err := LoadConfig(Flags{PermissionMode: "ask"}, lookup(map[string]string{"YOLO": "true", "DEEPSEEK_API_KEY": "env-key"}))
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 	if cfg.PermissionMode != "ask" {
 		t.Fatalf("PermissionMode = %q, want ask: an explicit --approval-mode flag must win over YOLO", cfg.PermissionMode)
-	}
-	if cfg.AutoApproveTools {
-		t.Fatal("AutoApproveTools = true, want false")
 	}
 }
 
@@ -363,14 +361,11 @@ func TestYOLOEnvEnablesBypassWithoutExplicitMode(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	cfg, err := LoadConfig(Flags{}, lookup(map[string]string{"YOLO": "true"}))
+	cfg, err := LoadConfig(Flags{}, lookup(map[string]string{"YOLO": "true", "DEEPSEEK_API_KEY": "env-key"}))
 	if err != nil {
 		t.Fatalf("LoadConfig failed: %v", err)
 	}
 	if cfg.PermissionMode != "bypass" {
 		t.Fatalf("PermissionMode = %q, want bypass", cfg.PermissionMode)
-	}
-	if !cfg.AutoApproveTools {
-		t.Fatal("AutoApproveTools = false, want true")
 	}
 }

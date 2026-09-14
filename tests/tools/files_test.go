@@ -167,6 +167,21 @@ func mustWriteAbs(t *testing.T, path string, content string) {
 	}
 }
 
+// sandboxedRegistryFor builds a registry whose file and command tools are
+// jailed to root, the way a delegation worktree is jailed.
+func sandboxedRegistryFor(t *testing.T, root string) *Registry {
+	t.Helper()
+	context, err := workspace.NewDefaultContext(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := SandboxedRegistry(SandboxConfig{Mode: SandboxModeOff, Workspace: root}, workspace.New(context))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return registry
+}
+
 func mustRead(t *testing.T, path string) string {
 	t.Helper()
 	content, err := os.ReadFile(path)
@@ -175,3 +190,84 @@ func mustRead(t *testing.T, path string) string {
 	}
 	return string(content)
 }
+
+func TestFileToolsAnchorToInjectedWorkspace(t *testing.T) {
+	// The workspace acts as a subagent worktree; the "parent" directory
+	// holds a file the tool must refuse to reach.
+	parent := t.TempDir()
+	if err := os.WriteFile(filepath.Join(parent, "secret.txt"), []byte("top secret"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	worktree := filepath.Join(parent, "worktree")
+	if err := os.MkdirAll(worktree, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "local.txt"), []byte("local"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	registry := sandboxedRegistryFor(t, worktree)
+
+	if _, err := registry.Run(context.Background(), runtime.ToolCall{Name: "read_file", Input: `{"path":"local.txt"}`}); err != nil {
+		t.Fatalf("read local file: %v", err)
+	}
+	if _, err := registry.Run(context.Background(), runtime.ToolCall{Name: "read_file", Input: `{"path":"../secret.txt"}`}); err == nil {
+		t.Fatal("read_file escaped the injected workspace")
+	}
+	if _, err := registry.Run(context.Background(), runtime.ToolCall{Name: "write_file", Input: `{"path":"../escape.txt","content":"x"}`}); err == nil {
+		t.Fatal("write_file escaped the injected workspace")
+	}
+	if _, err := os.Stat(filepath.Join(parent, "escape.txt")); err == nil {
+		t.Fatal("write_file created a file in the parent directory")
+	}
+}
+
+func TestListAndSearchSkipOutsideSymlinks(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "real.txt"), []byte("findme"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc", filepath.Join(workspace, "etc")); err != nil {
+		t.Skip("symlinks unavailable")
+	}
+	registry := sandboxedRegistryFor(t, workspace)
+	listing, err := registry.Run(context.Background(), runtime.ToolCall{Name: "list_files", Input: `{}`})
+	if err != nil {
+		t.Fatalf("list_files failed on an outside-pointing symlink: %v", err)
+	}
+	if !strings.Contains(listing, "real.txt") {
+		t.Fatalf("listing = %q, want real.txt", listing)
+	}
+	found, err := registry.Run(context.Background(), runtime.ToolCall{Name: "search", Input: `{"query":"findme"}`})
+	if err != nil {
+		t.Fatalf("search failed on an outside-pointing symlink: %v", err)
+	}
+	if !strings.Contains(found, "real.txt:1") {
+		t.Fatalf("search = %q, want a match in real.txt", found)
+	}
+}
+
+func TestReadFileTruncatesAtExactLimit(t *testing.T) {
+	workspace := t.TempDir()
+	var content strings.Builder
+	for i := 0; i < maxToolOutputLinesForTest+50; i++ {
+		content.WriteString("line\n")
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "big.txt"), []byte(content.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+	registry := sandboxedRegistryFor(t, workspace)
+	output, err := registry.Run(context.Background(), runtime.ToolCall{Name: "read_file", Input: `{"path":"big.txt"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	// maxToolOutputLines content lines plus the truncation marker.
+	if len(lines) != maxToolOutputLinesForTest+1 {
+		t.Fatalf("lines = %d, want %d content lines plus one marker", len(lines), maxToolOutputLinesForTest+1)
+	}
+	if !strings.HasSuffix(lines[len(lines)-1], "truncated") {
+		t.Fatalf("last line = %q, want the truncation marker", lines[len(lines)-1])
+	}
+}
+
+const maxToolOutputLinesForTest = 200

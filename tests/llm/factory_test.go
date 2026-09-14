@@ -16,7 +16,7 @@ func (fakeModel) Next(context.Context, []runtime.Message, []runtime.ToolSpec, fu
 
 func TestModelRegistryCreatesRegisteredProvider(t *testing.T) {
 	registry := NewModelRegistry()
-	registry.Register("fake", func() runtime.Model { return fakeModel{} })
+	registry.RegisterConfigured("fake", func(ProviderConfig) runtime.Model { return fakeModel{} })
 
 	model, err := registry.Create("fake", ProviderConfig{})
 	if err != nil {

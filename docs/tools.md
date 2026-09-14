@@ -43,6 +43,15 @@ be created; lexical prefixes and symlinks cannot grant access. LSP file reads us
 language-server processes start in the workspace cwd. Strict command sandbox construction takes its
 workspace bind root from the same injected context rather than the process cwd.
 
+File tools open a resolved path with `O_NOFOLLOW`, so a symlink swapped in for its final path
+component between the containment check and the open cannot redirect the read or write outside the
+workspace. Swapping a deeper path component remains possible and is accepted as residual risk.
+
+`read_file` and `apply_patch` refuse a file larger than 10 MiB rather than loading it into memory,
+and `search` bounds each line to 1 MiB so one minified or machine-generated line cannot abort the
+scan. `list_files` and `search` skip entries they cannot resolve or read — including symlinks that
+point outside the workspace — instead of failing the entire listing or search.
+
 The injected workspace is a switchable runtime binding. A successful session resume replaces its
 validated context, and subsequent built-in filesystem and command calls observe the restored cwd and
 roots. Language-server clients lazily reconnect when that cwd changes. MCP servers are configured

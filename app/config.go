@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"super-agent/app/instructions"
@@ -27,7 +28,6 @@ type Flags struct {
 
 type Config struct {
 	Provider           string
-	AutoApproveTools   bool
 	NoTools            bool
 	PermissionMode     runtime.PermissionMode
 	PermissionRules    runtime.PermissionRules
@@ -36,6 +36,7 @@ type Config struct {
 	LSPServers         []lsptools.ServerConfig
 	ModelConfig        llm.ProviderConfig
 	ProviderConfigs    map[string]llm.ProviderConfig
+	Instructions       instructions.Bundle
 	InstructionSources []string
 	Agents             map[string]AgentSettings
 	Agent              string
@@ -189,6 +190,9 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 	// The YOLO environment variable is a fallback for when no explicit
 	// mode was requested; an explicit --approval-mode flag always wins so
 	// a checked-in .env cannot silently disable permission prompts.
+	if flags.AutoApproveTools && flags.PermissionMode != "" {
+		return Config{}, errors.New("--yolo and --approval-mode are mutually exclusive; use --approval-mode bypass instead of --yolo")
+	}
 	if flags.AutoApproveTools || (flags.PermissionMode == "" && envTrue(lookup, "YOLO")) {
 		mode = runtime.PermissionModeBypass
 	}
@@ -234,13 +238,16 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 	for name, server := range settings.LSPServers {
 		lspServers = append(lspServers, lsptools.ServerConfig{Name: name, Command: server.Command, Args: server.Args, Extensions: server.Extensions, LanguageID: server.LanguageID, Root: cwd})
 	}
+	providerConfig, err := resolveProviderConfig(settings, provider, lookup)
+	if err != nil {
+		return Config{}, err
+	}
 	sort.Slice(lspServers, func(i, j int) bool { return lspServers[i].Name < lspServers[j].Name })
 	return Config{
-		Provider:         provider,
-		AutoApproveTools: mode == runtime.PermissionModeBypass,
-		NoTools:          flags.NoTools || envTrue(lookup, "NO_TOOLS"),
-		PermissionMode:   mode,
-		PermissionRules:  rules,
+		Provider:        provider,
+		NoTools:         flags.NoTools || envTrue(lookup, "NO_TOOLS"),
+		PermissionMode:  mode,
+		PermissionRules: rules,
 		Sandbox: tools.SandboxConfig{
 			Mode:         sandboxMode,
 			Workspace:    cwd,
@@ -252,8 +259,9 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 		},
 		MCPServers:         mcpServers,
 		LSPServers:         lspServers,
-		ModelConfig:        settings.Providers[provider],
+		ModelConfig:        providerConfig,
 		ProviderConfigs:    settings.Providers,
+		Instructions:       bundle,
 		InstructionSources: instructionSourcePaths(bundle),
 		Agents:             settings.Agents,
 		Agent:              firstNonEmpty(settings.Agent, "build"),
@@ -263,6 +271,39 @@ func LoadConfig(flags Flags, lookup func(string) (string, bool)) (Config, error)
 		Workspace:          workspaceContext,
 		ConfigRoot:         selectedProject.Root,
 	}, nil
+}
+
+// apikeyPlaceholder is the value DefaultSettings writes into a fresh
+// settings.json. It is not a real credential, so it is treated as "unset" to
+// let the provider's environment variable take over instead of being sent as
+// a bearer token.
+func apikeyPlaceholder(provider string) string {
+	if provider == "claude" {
+		return "sk-ant-..."
+	}
+	return "sk-..."
+}
+
+// resolveProviderConfig validates the selected provider at startup so a
+// missing provider or credential fails loudly instead of surfacing as an
+// HTTP 401 on the first turn.
+func resolveProviderConfig(settings Settings, provider string, lookup func(string) (string, bool)) (llm.ProviderConfig, error) {
+	config, ok := settings.Providers[provider]
+	if !ok {
+		return llm.ProviderConfig{}, errors.New("provider " + provider + " is not configured: add it to the providers map in settings.json")
+	}
+	if config.APIKey == apikeyPlaceholder(provider) {
+		config.APIKey = ""
+	}
+	if config.APIKey == "" {
+		envKey := strings.ToUpper(provider) + "_API_KEY"
+		if value, ok := lookup(envKey); ok && value != "" {
+			config.APIKey = value
+			return config, nil
+		}
+		return llm.ProviderConfig{}, errors.New("provider " + provider + " has no api_key: set it in settings.json or export " + envKey)
+	}
+	return config, nil
 }
 
 func envTrue(lookup func(string) (string, bool), key string) bool {

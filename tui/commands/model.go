@@ -236,7 +236,6 @@ func (m Model) handleAgent(parts []string) *Outcome {
 	return &Outcome{Status: "Using agent " + profile.Name, RefreshSnapshot: true, StatusBar: &StatusBar{
 		ModelName:      profile.Model,
 		PermissionMode: profile.PermissionMode,
-		AutoApprove:    m.ports.Permissions.AutoApproveTools(),
 	}}
 }
 
@@ -250,10 +249,8 @@ func (m Model) handlePermissions(parts []string) *Outcome {
 	// so the display cannot drift from actual behavior. The model is untouched,
 	// so the status bar keeps showing it.
 	mode := m.ports.Permissions.PermissionMode()
-	autoApprove := m.ports.Permissions.AutoApproveTools()
-	return &Outcome{Status: "Permissions", Output: formatPermissions(m.config, mode, autoApprove), StatusBar: &StatusBar{
+	return &Outcome{Status: "Permissions", Output: formatPermissions(m.config, mode, m.ports.Permissions.AutoApproveTools()), StatusBar: &StatusBar{
 		PermissionMode: mode,
-		AutoApprove:    autoApprove,
 	}}
 }
 

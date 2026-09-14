@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"errors"
+
+	"super-agent/runtime/execution"
 )
 
 func (s *Session) RunTurn(ctx context.Context, query string, notifications chan<- SessionNotification, approvals <-chan ApprovalDecision) error {
@@ -56,7 +58,9 @@ func waitApproval(ctx context.Context, approvals <-chan ApprovalDecision) (Appro
 			if ctx.Err() != nil {
 				return "", ctx.Err()
 			}
-			return "", errors.New("approval channel closed")
+			// A closed channel means the interface gave up waiting; report
+			// it as a dismissal so the engine cancels instead of failing.
+			return "", execution.ErrApprovalDismissed
 		}
 		return decision, nil
 	}

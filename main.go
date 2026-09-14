@@ -41,7 +41,6 @@ func main() {
 	profile := agentController.Current()
 	if _, err := tea.NewProgram(tui.New(app.NewTUIConversation(session, mcpController, agentController), tui.StartupInfo{
 		ModelName:        llm.ModelDisplayName(profile.Provider, llm.ProviderConfig{Model: profile.Model}),
-		AutoApprove:      profile.PermissionMode == "bypass",
 		PermissionMode:   string(profile.PermissionMode),
 		NoTools:          cfg.NoTools,
 		CWD:              cfg.Workspace.GetCWD(),

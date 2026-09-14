@@ -2,6 +2,10 @@ package runtime
 
 import "super-agent/runtime/execution"
 
+// ErrApprovalDismissed reports that the interface gave up waiting for an
+// approval decision; the engine cancels the run instead of failing it.
+var ErrApprovalDismissed = execution.ErrApprovalDismissed
+
 type ToolDecision = execution.ToolDecision
 
 const (

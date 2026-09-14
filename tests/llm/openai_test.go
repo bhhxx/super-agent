@@ -277,3 +277,77 @@ func TestOpenAIModelReturnsAllToolCalls(t *testing.T) {
 		t.Fatalf("ToolCalls = %+v, want first then second", resp.ToolCalls)
 	}
 }
+
+func TestOpenAIModelFailsOnTruncatedToolCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"write_file\",\"arguments\":\"{\\\"path\\\":\\\"main.go\\\",\\\"content\\\":\\\"package\"}}]},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	model := NewOpenAI(ProviderConfig{BaseURL: server.URL, APIKey: "test-key", Model: "test-model"})
+	resp, err := model.Next(context.Background(), []runtime.Message{
+		{Role: runtime.RoleUser, Content: "write the file"},
+	}, []runtime.ToolSpec{{Name: "write_file", Risky: true}}, nil)
+	if err == nil {
+		t.Fatalf("Next succeeded with %+v, want a truncation error: a half-emitted tool call must not reach the executor", resp)
+	}
+	if !strings.Contains(err.Error(), "truncated") {
+		t.Fatalf("error = %v, want a truncation error", err)
+	}
+}
+
+func TestOpenAIModelReportsUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			StreamOptions struct {
+				IncludeUsage bool `json:"include_usage"`
+			} `json:"stream_options"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if !body.StreamOptions.IncludeUsage {
+			t.Fatal("request did not set stream_options.include_usage")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	model := NewOpenAI(ProviderConfig{BaseURL: server.URL, APIKey: "test-key", Model: "test-model"})
+	resp, err := model.Next(context.Background(), []runtime.Message{{Role: runtime.RoleUser, Content: "hi"}}, nil, nil)
+	if err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if resp.Usage == nil || resp.Usage.InputTokens != 11 || resp.Usage.OutputTokens != 7 || resp.Usage.TotalTokens != 18 {
+		t.Fatalf("Usage = %+v, want provider-reported counts", resp.Usage)
+	}
+}
+
+func TestOpenAIModelSkipsAuthHeaderWithoutAPIKey(t *testing.T) {
+	unsetEnv(t, "OPENAI_API_KEY")
+	sawAuthHeader := false
+	originalTransport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = originalTransport })
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("Authorization") != "" {
+			sawAuthHeader = true
+		}
+		body := io.NopCloser(strings.NewReader("data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       body,
+			Request:    req,
+		}, nil
+	})
+
+	model := NewOpenAI(ProviderConfig{Model: "test-model"})
+	if _, err := model.Next(context.Background(), []runtime.Message{{Role: runtime.RoleUser, Content: "hi"}}, nil, nil); err != nil {
+		t.Fatalf("Next failed: %v", err)
+	}
+	if sawAuthHeader {
+		t.Fatal("request sent an Authorization header without a configured API key; the SDK env fallback must stay intact")
+	}
+}

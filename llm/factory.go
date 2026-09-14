@@ -21,10 +21,6 @@ func NewModelRegistry() *ModelRegistry {
 	return &ModelRegistry{factories: make(map[string]ModelFactory)}
 }
 
-func (r *ModelRegistry) Register(provider string, factory func() protocol.Model) {
-	r.factories[provider] = func(ProviderConfig) protocol.Model { return factory() }
-}
-
 func (r *ModelRegistry) RegisterConfigured(provider string, factory ModelFactory) {
 	r.factories[provider] = factory
 }

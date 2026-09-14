@@ -2,11 +2,13 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -143,6 +145,29 @@ func NewTurnID(now time.Time) TurnID {
 	return TurnID(now.UTC().Format("20060102T150405.000000000"))
 }
 
+// validateID rejects session identifiers that could escape the sessions
+// root. Every ID is joined into filesystem paths via filepath.Join, so path
+// separators, dot segments, and reserved names must never reach the store:
+// user-supplied ids (for example from /resume or /delete-session) resolve to
+// directories here unchecked otherwise.
+func validateID(id SessionID) error {
+	name := string(id)
+	if name == "" {
+		return errors.New("session id is required")
+	}
+	if name == "." || name == ".." || name != filepath.Base(name) || strings.HasPrefix(name, "_") {
+		return errors.New("invalid session id: " + name)
+	}
+	for _, r := range name {
+		switch {
+		case r >= '0' && r <= '9', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '-', r == '_':
+		default:
+			return errors.New("invalid session id: " + name)
+		}
+	}
+	return nil
+}
+
 func Fingerprint(messages []protocol.Message) string {
 	h := sha256.New()
 	for _, message := range messages {
@@ -160,6 +185,9 @@ func (s *Store) Create(meta Metadata, messages []protocol.Message) (Metadata, er
 	defer s.mu.Unlock()
 	if meta.ID == "" {
 		meta.ID = NewID(time.Now())
+	}
+	if err := validateID(meta.ID); err != nil {
+		return Metadata{}, err
 	}
 	now := time.Now().UTC()
 	if meta.CreatedAt.IsZero() {
@@ -199,6 +227,9 @@ func (s *Store) Create(meta Metadata, messages []protocol.Message) (Metadata, er
 func (s *Store) Append(id SessionID, record Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateID(id); err != nil {
+		return err
+	}
 	return s.appendUnlocked(id, record)
 }
 
@@ -213,6 +244,9 @@ func (s *Store) appendUnlocked(id SessionID, record Record) error {
 			record.TurnID = meta.CurrentTurnID
 		}
 		meta.UpdatedAt = time.Now().UTC()
+		// Best effort: the UpdatedAt refresh is cosmetic, and refusing to
+		// append the record over a failed refresh would lose the transcript
+		// entry the record exists for.
 		_ = s.writeMeta(meta)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -235,13 +269,20 @@ func (s *Store) appendUnlocked(id SessionID, record Record) error {
 	if err != nil {
 		return err
 	}
-	_, err = file.Write(append(encoded, '\n'))
-	return err
+	if _, err := file.Write(append(encoded, '\n')); err != nil {
+		return err
+	}
+	// Sync every append: a torn tail line would otherwise make the whole
+	// transcript unreadable after a crash or power loss.
+	return file.Sync()
 }
 
 func (s *Store) Metadata(id SessionID) (Metadata, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateID(id); err != nil {
+		return Metadata{}, err
+	}
 	return s.metadataUnlocked(id)
 }
 
@@ -260,6 +301,9 @@ func (s *Store) metadataUnlocked(id SessionID) (Metadata, error) {
 func (s *Store) SetCurrentTurn(id SessionID, turn TurnID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateID(id); err != nil {
+		return err
+	}
 	meta, err := s.metadataUnlocked(id)
 	if err != nil {
 		return err
@@ -290,6 +334,9 @@ func (s *Store) SaveWorkspaceDescription(id SessionID, spec WorkspaceSpec) error
 func (s *Store) RenameSession(id SessionID, title string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateID(id); err != nil {
+		return err
+	}
 	title = strings.TrimSpace(title)
 	if title == "" {
 		return errors.New("title is required")
@@ -306,6 +353,9 @@ func (s *Store) RenameSession(id SessionID, title string) error {
 func (s *Store) Delete(id SessionID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateID(id); err != nil {
+		return err
+	}
 	return os.RemoveAll(s.sessionDir(id))
 }
 
@@ -342,9 +392,16 @@ func (s *Store) List() ([]Summary, error) {
 func (s *Store) Records(id SessionID) ([]Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
 	return s.recordsUnlocked(id)
 }
 
+// recordsUnlocked reads the event log. A torn final line — the signature of
+// a crash mid-append — is healed by truncating back to the last complete
+// record; corruption anywhere else fails loudly, because silently dropping
+// mid-file records would rewrite history.
 func (s *Store) recordsUnlocked(id SessionID) ([]Record, error) {
 	file, err := os.Open(s.eventsPath(id))
 	if err != nil {
@@ -354,14 +411,34 @@ func (s *Store) recordsUnlocked(id SessionID) ([]Record, error) {
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 20*1024*1024)
 	var records []Record
+	var good int64
 	for scanner.Scan() {
+		line := scanner.Bytes()
 		var record Record
-		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
-			return nil, err
+		if err := json.Unmarshal(line, &record); err != nil {
+			offset := good + int64(len(line)) + 1
+			if s.onlyWhitespaceAfter(file, offset) {
+				return records, os.Truncate(s.eventsPath(id), good)
+			}
+			return nil, fmt.Errorf("corrupt session event at byte %d: %w", good, err)
 		}
 		records = append(records, record)
+		good += int64(len(line)) + 1
 	}
 	return records, scanner.Err()
+}
+
+// onlyWhitespaceAfter reports whether the file holds nothing but whitespace
+// after offset, i.e. the parse failure hit the tail of the log.
+func (s *Store) onlyWhitespaceAfter(file *os.File, offset int64) bool {
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return false
+	}
+	rest, err := io.ReadAll(file)
+	if err != nil {
+		return false
+	}
+	return len(bytes.TrimSpace(rest)) == 0
 }
 
 func (s *Store) Messages(id SessionID) ([]protocol.Message, error) {
@@ -414,6 +491,9 @@ func (s *Store) LastCheckpoint(id SessionID) (*Checkpoint, error) {
 func (s *Store) CheckpointUndo(id SessionID) (*Checkpoint, []protocol.Message, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateID(id); err != nil {
+		return nil, nil, 0, err
+	}
 	records, err := s.recordsUnlocked(id)
 	if err != nil {
 		return nil, nil, 0, err
@@ -433,6 +513,9 @@ func (s *Store) CheckpointUndo(id SessionID) (*Checkpoint, []protocol.Message, i
 func (s *Store) TruncateAfter(id SessionID, keep int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := validateID(id); err != nil {
+		return err
+	}
 	records, err := s.recordsUnlocked(id)
 	if err != nil {
 		return err
@@ -468,12 +551,17 @@ func writeRecords(path string, records []Record) error {
 			return err
 		}
 	}
-	return writer.Flush()
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	// Sync before the caller renames the temporary file into place, so the
+	// rewrite is durable when it becomes visible.
+	return file.Sync()
 }
 
 func (s *Store) writeMeta(meta Metadata) error {
-	if meta.ID == "" {
-		return errors.New("session id is required")
+	if err := validateID(meta.ID); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(s.sessionDir(meta.ID), 0700); err != nil {
 		return err
@@ -482,7 +570,32 @@ func (s *Store) writeMeta(meta Metadata) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.metaPath(meta.ID), append(content, '\n'), 0600)
+	content = append(content, '\n')
+	// meta.json gates session discovery and every further append, so a torn
+	// write must never leave a half-written file behind: write, fsync, and
+	// atomically rename a temporary file, like SaveMemory does.
+	temporary, err := os.CreateTemp(s.sessionDir(meta.ID), ".meta-*.json")
+	if err != nil {
+		return err
+	}
+	path := temporary.Name()
+	defer os.Remove(path)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(content); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(path, s.metaPath(meta.ID))
 }
 
 func (s *Store) sessionDir(id SessionID) string {

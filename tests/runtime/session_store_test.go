@@ -800,3 +800,83 @@ func TestResolverErrorLeavesNoToolMessageWhenNothingWasAsked(t *testing.T) {
 		t.Fatalf("messages = %+v, want only the user message", messages)
 	}
 }
+
+func TestStoreRejectsSessionIDsThatEscapeRoot(t *testing.T) {
+	st := store.New(t.TempDir())
+	for _, id := range []store.SessionID{"../..", "..", ".", "a/b", "_memory", "", "x y"} {
+		if err := st.Delete(id); err == nil {
+			t.Fatalf("Delete(%q) succeeded, want invalid-session-id error", id)
+		}
+		if err := st.Append(id, store.Record{Type: store.EventSessionStarted}); err == nil {
+			t.Fatalf("Append(%q) succeeded, want invalid-session-id error", id)
+		}
+	}
+}
+
+func TestStoreHealsTornTailLine(t *testing.T) {
+	root := t.TempDir()
+	st := store.New(root)
+	meta, err := st.Create(store.Metadata{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Append(meta.ID, store.Record{Type: store.EventMessageAppended, Message: &Message{Role: RoleUser, Content: "before crash"}}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash mid-append by appending a truncated JSON line.
+	eventsPath := filepath.Join(root, string(meta.ID), "events.jsonl")
+	handle, err := os.OpenFile(eventsPath, os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handle.WriteString(`{"type":"message_app`); err != nil {
+		t.Fatal(err)
+	}
+	handle.Close()
+
+	messages, err := st.Messages(meta.ID)
+	if err != nil {
+		t.Fatalf("Messages after torn tail: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Content != "before crash" {
+		t.Fatalf("messages = %+v, want the single record before the torn line", messages)
+	}
+	// The healed file must accept new appends.
+	if err := st.Append(meta.ID, store.Record{Type: store.EventMessageAppended, Message: &Message{Role: RoleUser, Content: "after crash"}}); err != nil {
+		t.Fatal(err)
+	}
+	messages, err = st.Messages(meta.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 {
+		t.Fatalf("messages = %+v, want two after append on healed log", messages)
+	}
+}
+
+func TestStoreFailsLoudlyOnMidFileCorruption(t *testing.T) {
+	root := t.TempDir()
+	st := store.New(root)
+	meta, err := st.Create(store.Metadata{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, content := range []string{"one", "two", "three"} {
+		if err := st.Append(meta.ID, store.Record{Type: store.EventMessageAppended, Message: &Message{Role: RoleUser, Content: content}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	eventsPath := filepath.Join(root, string(meta.ID), "events.jsonl")
+	raw, err := os.ReadFile(eventsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.SplitN(string(raw), "\n", 2)
+	corrupted := "NOT JSON\n" + lines[1]
+	if err := os.WriteFile(eventsPath, []byte(corrupted), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Messages(meta.ID); err == nil {
+		t.Fatal("Messages on mid-file corruption succeeded, want a loud error")
+	}
+}

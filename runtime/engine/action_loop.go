@@ -16,22 +16,25 @@ func (e *Engine) DispatchEvent(ctx context.Context, event machine.Event, onStrea
 	if _, startsTurn := event.(machine.UserMessageSubmitted); startsTurn {
 		return errors.New("user messages must be submitted through Engine.RunTurn")
 	}
-	return e.dispatchEvent(ctx, event, onStreamChunk, nil)
+	_, err := e.dispatchEvent(ctx, event, onStreamChunk, nil)
+	return err
 }
 
 func (e *Engine) RunTurn(ctx context.Context, event machine.UserMessageSubmitted, onStreamChunk func(protocol.StreamChunk), approvalWaiter execution.ApprovalWaiter) error {
 	started := time.Now()
-	err := e.dispatchEvent(ctx, event, onStreamChunk, approvalWaiter)
-	telemetry.Record("run", telemetry.Fields{"run_id": string(e.runs.CurrentRunID()), "duration_ms": time.Since(started).Milliseconds(), "error": errorString(err)})
+	// dispatchEvent returns the run ID captured right after the run started,
+	// so the record names this turn even when cancel paths later bump the ID.
+	runID, err := e.dispatchEvent(ctx, event, onStreamChunk, approvalWaiter)
+	telemetry.Record("run", telemetry.Fields{"run_id": string(runID), "duration_ms": time.Since(started).Milliseconds(), "error": errorString(err)})
 	return err
 }
 
-func (e *Engine) dispatchEvent(ctx context.Context, event machine.Event, onStreamChunk func(protocol.StreamChunk), approvalWaiter execution.ApprovalWaiter) error {
+func (e *Engine) dispatchEvent(ctx context.Context, event machine.Event, onStreamChunk func(protocol.StreamChunk), approvalWaiter execution.ApprovalWaiter) (execution.RunID, error) {
 	e.mu.Lock()
-	decision, err := e.calculateTransitionLocked(event) // transition 函数执行
+	decision, err := e.calculateTransitionLocked(event)
 	if err != nil {
 		e.mu.Unlock()
-		return err
+		return "", err
 	}
 	runCtx := ctx
 	startedRun := false
@@ -42,23 +45,23 @@ func (e *Engine) dispatchEvent(ctx context.Context, event machine.Event, onStrea
 		currentCtx, ok := e.runs.CurrentContext()
 		if !ok {
 			e.mu.Unlock()
-			return errors.New("event scheduled actions without an active run")
+			return "", errors.New("event scheduled actions without an active run")
 		}
 		runCtx = currentCtx
 	}
-	if err := e.commitTransitionLocked(decision); err != nil { // 原子提交 transition 的状态变化和动作计划
+	if err := e.commitTransitionLocked(decision); err != nil { // commit the transition's data changes and action plan atomically
 		if startedRun {
 			e.runs.CancelRun()
 		}
 		e.mu.Unlock()
-		return err
+		return "", err
 	}
 	state := e.runtimeData.State
 	runID := e.runs.CurrentRunID()
 	e.mu.Unlock()
 	telemetry.Record("transition", telemetry.Fields{"run_id": string(runID), "event": typeName(event), "state": string(state), "scheduled_actions": len(decision.ActionPlan.Schedule)})
 	e.notifyStateObserver()
-	return e.runScheduledActions(runCtx, onStreamChunk, approvalWaiter)
+	return runID, e.runScheduledActions(runCtx, onStreamChunk, approvalWaiter)
 }
 
 func (e *Engine) calculateTransitionLocked(event machine.Event) (machine.TransitionResult, error) {
@@ -104,8 +107,11 @@ func (e *Engine) runScheduledActions(ctx context.Context, onStreamChunk func(pro
 		}
 		e.mu.Unlock()
 		if err := e.executeScheduledAction(ctx, action, onStreamChunk, approvalWaiter); err != nil {
-			_, awaitingApproval := action.Action.(machine.AwaitApproval)
-			if errors.Is(err, context.Canceled) || awaitingApproval {
+			// Cancellation is decided by error identity, not by action type:
+			// a dropped approval or a cancelled context cancels the run,
+			// while a misconfigured waiter or any other fault takes the
+			// error path, which answers the outstanding tool calls.
+			if errors.Is(err, context.Canceled) || errors.Is(err, execution.ErrApprovalDismissed) {
 				e.runs.CancelRun()
 				_ = e.DispatchEvent(ctx, machine.CancelRequested{}, nil)
 			} else {
@@ -146,11 +152,23 @@ func (e *Engine) executeScheduledAction(ctx context.Context, action execution.Qu
 	if reply, ok := completion.Result.(execution.ModelReplied); ok {
 		fields["input_tokens_estimate"] = estimateMessageTokens(env.Messages)
 		fields["output_tokens_estimate"] = estimateTokens(reply.Response.Content + reply.Response.ReasoningContent)
+		// Exact provider counts win over the rune-count estimates when the
+		// adapter could obtain them.
+		if reply.Response.Usage != nil {
+			fields["input_tokens"] = reply.Response.Usage.InputTokens
+			fields["output_tokens"] = reply.Response.Usage.OutputTokens
+			fields["total_tokens"] = reply.Response.Usage.TotalTokens
+		}
 	}
 	telemetry.Record("action", fields)
 	if !e.runs.IsCurrent(completion.RunID) {
 		return nil
 	}
+	// Specs are fetched outside the engine lock on purpose: a registry
+	// change (an MCP reconnect, say) can block Specs for seconds, and the
+	// lock must stay free for queries and dispatch. The cost is that this
+	// one resolution may classify against a spec set that just changed —
+	// benign, since the next action re-fetches.
 	toolSpecs := e.toolSpecs()
 	e.mu.Lock()
 	batch := cloneToolBatch(e.runtimeData.ToolBatch)
@@ -216,13 +234,18 @@ func cloneToolBatch(batch *machine.ToolCallBatch) *machine.ToolCallBatch {
 func (e *Engine) toolSpecs() []protocol.ToolSpec { return e.runner.ToolSpecs() }
 
 func (e *Engine) recordStreamChunk(runID execution.RunID, chunk protocol.StreamChunk) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	// Re-check staleness under the lock: a reset that lands between the
+	// stream callback and this commit must not append into a cleared
+	// conversation.
 	if !e.runs.IsCurrent(runID) {
 		return
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	_ = e.commitTransitionLocked(machine.TransitionResult{
+	if err := e.commitTransitionLocked(machine.TransitionResult{
 		NextState:          e.runtimeData.State,
 		RuntimeDataChanges: []machine.RuntimeDataChange{machine.AppendStreamingAssistant{Chunk: chunk}},
-	})
+	}); err != nil {
+		telemetry.Record("stream_chunk_rejected", telemetry.Fields{"run_id": string(runID), "error": err.Error()})
+	}
 }

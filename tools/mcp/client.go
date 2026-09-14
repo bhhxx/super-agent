@@ -114,18 +114,36 @@ func connectServer(ctx context.Context, config ServerConfig) (*server, []builtin
 	return connected, batch, nil
 }
 
+// Add connects a new server. The connect happens outside the manager lock —
+// it can block for the full connect timeout on a hung server, and holding
+// the lock would freeze Tools/Specs/Servers for every concurrent reader.
+// The closed/duplicate checks run again under the lock before installing.
 func (m *Manager) Add(ctx context.Context, config ServerConfig) ([]builtintools.Tool, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		return nil, errors.New("MCP manager is closed")
 	}
 	if _, exists := m.servers[config.Name]; exists {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("MCP server %q is duplicated", config.Name)
 	}
+	m.mu.Unlock()
+
 	connected, batch, err := connectServer(ctx, config)
 	if err != nil {
 		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		_ = connected.session.Close()
+		return nil, errors.New("MCP manager is closed")
+	}
+	if _, exists := m.servers[config.Name]; exists {
+		_ = connected.session.Close()
+		return nil, fmt.Errorf("MCP server %q is duplicated", config.Name)
 	}
 	existing := make(map[string]struct{}, len(m.tools))
 	for _, tool := range m.tools {
@@ -161,16 +179,29 @@ func (m *Manager) Remove(name string) ([]string, error) {
 	return append([]string(nil), connected.toolNames...), connected.session.Close()
 }
 
+// Restart reconnects a server. Like Add, the connect runs outside the
+// manager lock so a hung server cannot block readers.
 func (m *Manager) Restart(ctx context.Context, name string, replace func([]string, []builtintools.Tool) error) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
 	old, exists := m.servers[name]
+	config := old.config
+	m.mu.RUnlock()
 	if !exists {
 		return fmt.Errorf("MCP server %q not found", name)
 	}
-	replacement, batch, err := connectServer(ctx, old.config)
+
+	replacement, batch, err := connectServer(ctx, config)
 	if err != nil {
 		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, exists := m.servers[name]
+	if !exists || current != old {
+		// Removed or restarted concurrently; drop this connection.
+		_ = replacement.session.Close()
+		return fmt.Errorf("MCP server %q changed while restarting", name)
 	}
 	if replace != nil {
 		if err := replace(append([]string(nil), old.toolNames...), append([]builtintools.Tool(nil), batch...)); err != nil {
@@ -288,7 +319,14 @@ func formatResult(result *sdk.CallToolResult) string {
 		output = "MCP tool reported an error"
 	}
 	if len(output) > maxResultBytes {
-		output = output[:maxResultBytes] + "\n... truncated"
+		// Cut on a rune boundary so multibyte text does not turn into
+		// replacement characters at the truncation point: walk back over
+		// any UTF-8 continuation bytes.
+		cut := maxResultBytes
+		for cut > 0 && output[cut]&0xC0 == 0x80 {
+			cut--
+		}
+		output = output[:cut] + "\n... truncated"
 	}
 	return output
 }

@@ -15,16 +15,13 @@ type ApprovalKey struct {
 type ApprovalStore interface {
 	AllowAlways(key ApprovalKey)
 	IsAlwaysAllowed(key ApprovalKey) bool
-	SetAutoApproveTools(enabled bool)
-	AutoApproveTools() bool
 }
 
 type MemoryApprovalStore struct {
-	mu               sync.Mutex
-	always           map[ApprovalKey]bool
-	autoApproveTools bool
-	mode             PermissionMode
-	rules            PermissionRules
+	mu     sync.Mutex
+	always map[ApprovalKey]bool
+	mode   PermissionMode
+	rules  PermissionRules
 }
 
 func NewMemoryApprovalStore() *MemoryApprovalStore {
@@ -44,18 +41,6 @@ func (s *MemoryApprovalStore) IsAlwaysAllowed(key ApprovalKey) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.always[key]
-}
-
-func (s *MemoryApprovalStore) SetAutoApproveTools(enabled bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.autoApproveTools = enabled
-}
-
-func (s *MemoryApprovalStore) AutoApproveTools() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.autoApproveTools
 }
 
 func (s *MemoryApprovalStore) SetPermissionPolicy(mode PermissionMode, rules PermissionRules) {

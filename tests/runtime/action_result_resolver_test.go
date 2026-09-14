@@ -293,3 +293,60 @@ func TestGitPushIsClassifiedNetwork(t *testing.T) {
 		t.Fatalf("decision = %v, want needs approval for network git push", decision)
 	}
 }
+
+func TestAllowPrefixDoesNotBypassDestructiveGate(t *testing.T) {
+	policy := NewPolicy(PermissionModeAsk, PermissionRules{AllowPrefixes: []string{"rm"}})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"rm -rf build"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+
+	if decision != DecisionNeedsApproval {
+		t.Fatalf("decision = %v, want needs approval: an allow rule must not promote destructive commands past the gate", decision)
+	}
+}
+
+func TestAllowPrefixMatchesAtTokenBoundary(t *testing.T) {
+	policy := NewPolicy(PermissionModeAsk, PermissionRules{AllowPrefixes: []string{"git"}})
+
+	allowed := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"git status"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+	if allowed != DecisionRunDirectly {
+		t.Fatalf("decision = %v, want run directly for git status", allowed)
+	}
+
+	lookalike := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"gitk"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+	if lookalike != DecisionNeedsApproval {
+		t.Fatalf("decision = %v, want needs approval: 'git' must not match 'gitk'", lookalike)
+	}
+}
+
+func TestDenyRuleBeatsAllowRule(t *testing.T) {
+	policy := NewPolicy(PermissionModeBypass, PermissionRules{
+		AllowTools:   []string{"bash"},
+		DenyPrefixes: []string{"sudo"},
+	})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"sudo apt install jq"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+
+	if decision != DecisionDenied {
+		t.Fatalf("decision = %v, want denied: deny rules are absolute", decision)
+	}
+}
+
+func TestAllowToolStillRunsOrdinaryRiskyToolInAskMode(t *testing.T) {
+	policy := NewPolicy(PermissionModeAsk, PermissionRules{AllowTools: []string{"bash"}})
+
+	decision := policy.ClassifyToolCall(ToolCall{Name: "bash", Input: `{"command":"printf ok"}`}, ToolPolicyInput{
+		ToolSpecs: []ToolSpec{{Name: "bash", Risky: true}},
+	})
+
+	if decision != DecisionRunDirectly {
+		t.Fatalf("decision = %v, want run directly for an explicitly allowed tool", decision)
+	}
+}

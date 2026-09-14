@@ -76,9 +76,6 @@ func (t RunCommandTool) Run(ctx context.Context, call protocol.ToolCall) (string
 	if err != nil {
 		return "", err
 	}
-	if args.CWD == "" {
-		args.CWD = "."
-	}
 	output, err := runnerOrDefault(t.runner).runShell(ctx, cwd, args.TimeoutSeconds, args.MaxOutputBytes, args.Command)
 	if err != nil && !args.ContinueOnError {
 		return output, err
@@ -114,6 +111,11 @@ func (t GoTestTool) Run(ctx context.Context, call protocol.ToolCall) (string, er
 	cwd, err := commandCWD(t.workspace, args.CWD)
 	if err != nil {
 		return "", err
+	}
+	for _, pkg := range args.Packages {
+		if strings.HasPrefix(pkg, "-") {
+			return "", errors.New("package paths must not start with '-': " + pkg)
+		}
 	}
 	cmdArgs := append([]string{"test"}, args.Packages...)
 	return runnerOrDefault(t.runner).runExec(ctx, cwd, defaultCommandTimeout, defaultOutputBytes, "go", cmdArgs...)
@@ -214,6 +216,8 @@ func (t GitDiffTool) Run(ctx context.Context, call protocol.ToolCall) (string, e
 	return runnerOrDefault(t.runner).runExec(ctx, cwd, defaultCommandTimeout, defaultOutputBytes, "git", cmdArgs...)
 }
 
+// commandCWD resolves a command tool's cwd argument inside the workspace,
+// defaulting to the workspace cwd when the caller passes none.
 func commandCWD(workspace WorkspaceContext, cwd string) (string, error) {
 	if workspace == nil {
 		return "", errors.New("workspace is not configured")
@@ -223,14 +227,6 @@ func commandCWD(workspace WorkspaceContext, cwd string) (string, error) {
 	}
 	path, _, err := resolveReadable(workspace, cwd)
 	return path, err
-}
-
-func runShell(ctx context.Context, cwd string, timeoutSeconds int, maxBytes int, command string) (string, error) {
-	return directCommandRunner.runShell(ctx, cwd, timeoutSeconds, maxBytes, command)
-}
-
-func runExec(ctx context.Context, cwd string, timeout time.Duration, maxBytes int, name string, args ...string) (string, error) {
-	return directCommandRunner.runExec(ctx, cwd, timeout, maxBytes, name, args...)
 }
 
 func (r *commandRunner) runShell(ctx context.Context, cwd string, timeoutSeconds int, maxBytes int, command string) (string, error) {

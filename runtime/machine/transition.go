@@ -246,32 +246,40 @@ func handleToolCallDenied(snapshot MachineSnapshot, event ToolCallDenied) (Trans
 	}, nil
 }
 
-func handleErrorOccurred(snapshot MachineSnapshot, event ErrorOccurred) (TransitionResult, error) {
-	reason := runtimeErrorMessage(event.Err)
-	// Every tool call the model asked for must be answered. An unanswered call
-	// produces a transcript the provider rejects with a 400, and because the
-	// transcript is persisted the failure survives a resume.
-	//
-	// A dispatched call is always in exactly one of three places: awaiting
-	// approval, running, or already answered by an earlier append. So the
-	// outstanding set is the pending call, the current call, and every call the
-	// batch has not reached yet.
-	changes := []RuntimeDataChange{FlushStreamingAssistant{Interrupted: true}}
+// outstandingToolResults answers every tool call the model asked for but that
+// has not been answered yet. A dispatched call is always in exactly one of
+// three places: awaiting approval, running, or already answered by an earlier
+// append. So the outstanding set is the pending call, the current call, and
+// every call the batch has not reached yet.
+//
+// Every tool call the model asked for must be answered. An unanswered call
+// produces a transcript the provider rejects with a 400, and because the
+// transcript is persisted the failure survives a resume. Both the error and
+// the cancel path go through here.
+func outstandingToolResults(snapshot MachineSnapshot, runningResult, notExecuted string) []RuntimeDataChange {
+	var results []RuntimeDataChange
 	if snapshot.pendingTool != nil {
-		changes = append(changes, AppendToolResult{
+		results = append(results, AppendToolResult{
 			Call:   *snapshot.pendingTool,
-			Result: "not executed: " + reason,
+			Result: notExecuted,
 		})
 	}
 	if snapshot.currentTool != nil {
-		changes = append(changes, AppendToolResult{Call: *snapshot.currentTool, Result: reason})
+		results = append(results, AppendToolResult{Call: *snapshot.currentTool, Result: runningResult})
 	}
 	for _, call := range snapshot.queue.remaining {
-		changes = append(changes, AppendToolResult{
+		results = append(results, AppendToolResult{
 			Call:   call,
-			Result: "not executed: " + reason,
+			Result: notExecuted,
 		})
 	}
+	return results
+}
+
+func handleErrorOccurred(snapshot MachineSnapshot, event ErrorOccurred) (TransitionResult, error) {
+	reason := runtimeErrorMessage(event.Err)
+	changes := append([]RuntimeDataChange{FlushStreamingAssistant{Interrupted: true}},
+		outstandingToolResults(snapshot, reason, "not executed: "+reason)...)
 	changes = append(changes,
 		ClearPendingTool{},
 		ClearCurrentTool{},
@@ -284,16 +292,18 @@ func handleErrorOccurred(snapshot MachineSnapshot, event ErrorOccurred) (Transit
 	}, nil
 }
 
-func handleCancelRequested(MachineSnapshot, CancelRequested) (TransitionResult, error) {
+func handleCancelRequested(snapshot MachineSnapshot, _ CancelRequested) (TransitionResult, error) {
+	changes := append([]RuntimeDataChange{FlushStreamingAssistant{Interrupted: true}},
+		outstandingToolResults(snapshot, "cancelled", "not executed: cancelled")...)
+	changes = append(changes,
+		ClearPendingTool{},
+		ClearCurrentTool{},
+		ClearToolCallBatch{},
+	)
 	return TransitionResult{
-		NextState: StateIdle,
-		RuntimeDataChanges: []RuntimeDataChange{
-			FlushStreamingAssistant{Interrupted: true},
-			ClearPendingTool{},
-			ClearCurrentTool{},
-			ClearToolCallBatch{},
-		},
-		ActionPlan: ActionPlan{ClearExisting: true},
+		NextState:          StateIdle,
+		RuntimeDataChanges: changes,
+		ActionPlan:         ActionPlan{ClearExisting: true},
 	}, nil
 }
 

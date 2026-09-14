@@ -78,26 +78,37 @@ func (p *DefaultPolicy) Rules() PermissionRules {
 	return p.rules
 }
 
+// ClassifyToolCall resolves a tool call in a fixed precedence order:
+//
+//  1. deny rules (absolute — no mode or allow rule overrides them)
+//  2. bypass mode (runs everything not denied)
+//  3. plan mode (read-only safe tools only, everything else denied)
+//  4. destructive commands and network access (approval required, even when
+//     an allow rule matches: an explicit allow list approves ordinary risky
+//     work but never silently promotes destructive or network commands)
+//  5. allow rules (skip the ordinary risky-tool approval)
+//  6. mode defaults and risky-tool approval
 func (p *DefaultPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput) ToolDecision {
 	req := p.PermissionRequest(call, input)
 	if p.matches(call.Name, p.rules.DenyTools) || p.matchesPrefix(req.Command, p.rules.DenyPrefixes) || p.touchesProtectedPath(req) || p.touchesDeniedPath(req) || p.usesDeniedEnv(req) {
 		return DecisionDenied
 	}
-	if p.matches(call.Name, p.rules.AllowTools) || p.matchesPrefix(req.Command, p.rules.AllowPrefixes) || p.pathsAllowed(req) || p.envAllowed(req) {
+	if p.mode == PermissionModeBypass {
 		return DecisionRunDirectly
 	}
-	switch p.mode {
-	case PermissionModeBypass:
-		return DecisionRunDirectly
-	case PermissionModePlan:
+	if p.mode == PermissionModePlan {
 		if req.CommandClass == CommandClassReadOnly && !p.needsApproval(call, input.ToolSpecs) {
 			return DecisionRunDirectly
 		}
 		return DecisionDenied
-	case PermissionModeAcceptEdits:
-		if req.CommandClass == CommandClassDestructive || p.networkDenied(req) {
-			return DecisionNeedsApproval
-		}
+	}
+	if req.CommandClass == CommandClassDestructive || p.networkDenied(req) {
+		return DecisionNeedsApproval
+	}
+	if p.matches(call.Name, p.rules.AllowTools) || p.matchesPrefix(req.Command, p.rules.AllowPrefixes) || p.pathsAllowed(req) || p.envAllowed(req) {
+		return DecisionRunDirectly
+	}
+	if p.mode == PermissionModeAcceptEdits {
 		if req.CommandClass == CommandClassReadOnly {
 			return DecisionRunDirectly
 		}
@@ -105,7 +116,7 @@ func (p *DefaultPolicy) ClassifyToolCall(call ToolCall, input ToolPolicyInput) T
 			return DecisionRunDirectly
 		}
 	}
-	if p.needsApproval(call, input.ToolSpecs) || p.networkDenied(req) {
+	if p.needsApproval(call, input.ToolSpecs) {
 		return DecisionNeedsApproval
 	}
 	return DecisionRunDirectly
@@ -237,10 +248,17 @@ func (p *DefaultPolicy) matches(value string, patterns []string) bool {
 	return false
 }
 
+// matchesPrefix reports whether command starts with prefix at a token
+// boundary: "git" matches "git status" and "git" but not "gitk".
 func (p *DefaultPolicy) matchesPrefix(command string, prefixes []string) bool {
 	command = strings.TrimSpace(command)
 	for _, prefix := range prefixes {
-		if strings.HasPrefix(command, strings.TrimSpace(prefix)) {
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" || !strings.HasPrefix(command, prefix) {
+			continue
+		}
+		rest := command[len(prefix):]
+		if rest == "" || rest[0] == ' ' || rest[0] == '\t' {
 			return true
 		}
 	}

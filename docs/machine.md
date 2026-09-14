@@ -66,15 +66,15 @@ The canonical edge list. `tests/architecture/spec_test.go` enumerates all 6 stat
 | AdvancingQueue | ToolCallReadyToRun | RunningTool | AdvanceToolCallBatch, SetCurrentTool | Schedule RunTool |
 | AdvancingQueue | ToolCallDenied | AdvancingQueue | AdvanceToolCallBatch, AppendToolResult | Schedule CheckToolQueue |
 | any | ErrorOccurred | Idle | FlushStreamingAssistant, AppendToolResult, ClearPendingTool, ClearCurrentTool, ClearToolCallBatch | Clear existing |
-| any | CancelRequested | Idle | FlushStreamingAssistant, ClearPendingTool, ClearCurrentTool, ClearToolCallBatch | Clear existing |
+| any | CancelRequested | Idle | FlushStreamingAssistant, AppendToolResult, ClearPendingTool, ClearCurrentTool, ClearToolCallBatch | Clear existing |
 | any | ResetRequested | Idle | ResetConversation | Clear existing |
 
 `any` means every state, `Initializing` and `Idle` included. The `RuntimeDataChanges` column for an
-`any` row is a superset sketch, not an exact list: `handleErrorOccurred` appends one
-`AppendToolResult` per outstanding call, so the count varies with the starting state (4 changes from
-`WaitingLLM`, 5 from `RunningTool` or `AdvancingQueue`). The conformance test therefore pins the edge
-set and `NextState` only, while `tests/runtime/transition_test.go` pins the exact change lists per
-starting state.
+`any` row is a superset sketch, not an exact list: `handleErrorOccurred` and `handleCancelRequested`
+append one `AppendToolResult` per outstanding call, so the count varies with the starting state (4
+changes from `WaitingLLM`, 5 from `WaitingApproval`, `RunningTool`, or a single-call `AdvancingQueue`
+batch). The conformance test therefore pins the edge set and `NextState` only, while
+`tests/runtime/transition_test.go` pins the exact change lists per starting state.
 
 Two denial paths exist and they are not the same thing:
 
@@ -85,11 +85,14 @@ Two denial paths exist and they are not the same thing:
 Both append the denial as that call's tool result and continue advancing the queue, so the model can
 choose another action rather than losing the turn.
 
-`handleErrorOccurred` answers every call the model asked for. A dispatched call is always in exactly
-one of three places — awaiting approval, running, or not yet reached by the batch — so the outstanding
-set is the pending call, the current call, and every remaining batch call. Each gets a tool result. An
-unanswered tool call produces a transcript the provider rejects with a 400, and because the transcript
-is persisted, that failure would survive a resume.
+`handleErrorOccurred` and `handleCancelRequested` both answer every call the model asked for — the
+former with the error reason, the latter with a `cancelled` result. A dispatched call is always in
+exactly one of three places — awaiting approval, running, or not yet reached by the batch — so the
+outstanding set is the pending call, the current call, and every remaining batch call. Each gets a
+tool result. An unanswered tool call produces a transcript the provider rejects with a 400, and
+because the transcript is persisted, that failure would survive a resume. Cancelling is therefore
+just as bound by this rule as failing; there is no cancel path that leaves a dispatched call
+unanswered.
 
 ## RuntimeData
 

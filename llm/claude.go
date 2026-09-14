@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"super-agent/runtime/protocol"
@@ -24,7 +25,12 @@ func NewClaude(cfg ProviderConfig) *ClaudeModel {
 
 func newClaudeModel(cfg ProviderConfig) *ClaudeModel {
 	opts := []option.RequestOption{
-		option.WithAPIKey(cfg.APIKey),
+		option.WithHTTPClient(httpClient()),
+	}
+	// An empty key must not shadow the SDK's environment fallback
+	// (ANTHROPIC_API_KEY), so only send a header when configured.
+	if cfg.APIKey != "" {
+		opts = append(opts, option.WithAPIKey(cfg.APIKey))
 	}
 	if cfg.BaseURL != "" {
 		opts = append(opts, option.WithBaseURL(cfg.BaseURL))
@@ -58,11 +64,15 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []protocol.Message, too
 	var currentToolUseID string
 	var currentToolUseName string
 	var currentToolUseInput string
+	var stopReason anthropic.StopReason
+	var usage protocol.Usage
 
 	for stream.Next() {
 		event := stream.Current()
 
 		switch event.Type {
+		case "message_start":
+			usage.InputTokens = event.Message.Usage.InputTokens
 		case "content_block_start":
 			if event.ContentBlock.Type == "tool_use" {
 				currentToolUseID = event.ContentBlock.ID
@@ -98,6 +108,10 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []protocol.Message, too
 				currentToolUseName = ""
 				currentToolUseInput = ""
 			}
+		case "message_delta":
+			stopReason = event.Delta.StopReason
+			usage.OutputTokens = event.Usage.OutputTokens
+			usage.TotalTokens = usage.InputTokens + usage.OutputTokens
 		}
 	}
 
@@ -105,18 +119,24 @@ func (m *ClaudeModel) Next(ctx context.Context, messages []protocol.Message, too
 		return protocol.ModelResponse{}, err
 	}
 
-	if len(toolCalls) > 0 {
-		return protocol.ModelResponse{
-			Content:          finalAnswer,
-			ReasoningContent: reasoningContent,
-			ToolCalls:        toolCalls,
-		}, nil
+	// A max_tokens stop means the provider cut the response mid-stream. A
+	// half-emitted input_json_delta would otherwise reach the tool executor
+	// as if it were valid JSON, so fail loudly instead.
+	if stopReason == "max_tokens" {
+		return protocol.ModelResponse{}, errors.New("llm output truncated by the token limit (stop_reason=max_tokens); raise the model's max output or shorten the conversation")
 	}
 
-	return protocol.ModelResponse{
+	response := protocol.ModelResponse{
 		Content:          finalAnswer,
 		ReasoningContent: reasoningContent,
-	}, nil
+	}
+	if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+		response.Usage = &usage
+	}
+	if len(toolCalls) > 0 {
+		response.ToolCalls = toolCalls
+	}
+	return response, nil
 }
 
 func splitSystemMessages(messages []protocol.Message) (string, []protocol.Message) {
@@ -213,17 +233,36 @@ func mergeAdjacentMessages(messages []anthropic.MessageParam) []anthropic.Messag
 	return merged
 }
 
+// toClaudeTools passes the whole tool schema through: known keys populate
+// the typed fields and every other top-level keyword ($defs, $ref, oneOf,
+// …) rides along via ExtraFields. Cherry-picking properties/required here
+// silently degraded MCP schemas that rely on shared definitions.
 func toClaudeTools(tools []protocol.ToolSpec) []anthropic.ToolUnionParam {
 	var result []anthropic.ToolUnionParam
 	for _, t := range tools {
+		schema := anthropic.ToolInputSchemaParam{}
+		extras := map[string]any{}
+		for key, value := range t.Parameters {
+			switch key {
+			case "properties":
+				schema.Properties = value
+			case "required":
+				schema.Required = interfaceToStringSlice(value)
+			case "type":
+				// Anthropic custom tools require the root type "object",
+				// which is the marshaled default; nothing to override.
+			default:
+				extras[key] = value
+			}
+		}
+		if len(extras) > 0 {
+			schema.ExtraFields = extras
+		}
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{
 				Name:        t.Name,
 				Description: anthropic.String(t.Description),
-				InputSchema: anthropic.ToolInputSchemaParam{
-					Properties: t.Parameters["properties"],
-					Required:   interfaceToStringSlice(t.Parameters["required"]),
-				},
+				InputSchema: schema,
 			},
 		})
 	}

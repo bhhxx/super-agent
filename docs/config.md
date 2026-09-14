@@ -28,6 +28,12 @@ permission mode, for instance — fail config load rather than falling back sile
 `provider` selects the default. Adapters live in `llm/`; the OpenAI-compatible providers send the
 system prompt as a chat `system` message, Claude sends it through the Anthropic `system` field.
 
+The selected provider's credential is resolved at config load. The template placeholder (`sk-...`,
+`sk-ant-...`) counts as unset, and `<PROVIDER>_API_KEY` — `DEEPSEEK_API_KEY`, for example — supplies
+the credential when the settings entry leaves it unset. A provider that is absent from `providers`,
+or that ends up with no credential, fails config load with a message naming what is missing rather
+than failing later as an authentication error on the first turn.
+
 ## Agents
 
 The top-level `agent` selects `build`, `plan`, or a profile from `agents`. Custom profiles may override

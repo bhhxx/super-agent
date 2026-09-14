@@ -18,7 +18,6 @@ import (
 
 type StartupInfo struct {
 	ModelName        string
-	AutoApprove      bool
 	PermissionMode   string
 	NoTools          bool
 	CWD              string
@@ -205,7 +204,6 @@ func (a App) applyOutcome(outcome *commands.Outcome, command tea.Cmd) (tea.Model
 			a.info.ModelName = outcome.StatusBar.ModelName
 		}
 		a.info.PermissionMode = outcome.StatusBar.PermissionMode
-		a.info.AutoApprove = outcome.StatusBar.AutoApprove
 	}
 	if outcome.RefreshSnapshot {
 		a.refreshSnapshot()

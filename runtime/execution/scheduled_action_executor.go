@@ -11,6 +11,12 @@ type ScheduledActionInput struct {
 	ApprovalWaiter ApprovalWaiter
 }
 
+// ErrApprovalDismissed reports that the approval waiter gave up waiting — the
+// user dismissed the prompt or the interface went away. The engine treats it
+// as a cancellation. Any other approval error is a real fault and takes the
+// error path, which answers the outstanding tool calls.
+var ErrApprovalDismissed = errors.New("approval dismissed")
+
 type ApprovalWaiter interface {
 	WaitApproval(context.Context, ToolCall, PermissionRequest) (ApprovalDecision, error)
 }

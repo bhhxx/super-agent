@@ -82,6 +82,10 @@ func (t *subagentTool) Run(ctx context.Context, call runtime.ToolCall) (string, 
 		if err != nil {
 			return "", err
 		}
+		// Every exit path after this point tears the worktree down, so
+		// delegations do not accumulate worktree directories and git
+		// worktree metadata in the repository.
+		defer t.removeWorktree(cwd)
 	}
 	initial, bundle, err := initialMessagesWithAgent(cwd, profile)
 	if err != nil {
@@ -175,6 +179,25 @@ func (t *subagentTool) createWorktree(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("create worktree: %w", err)
 	}
 	return path, nil
+}
+
+// removeWorktree tears down a delegation worktree on a fresh context: the
+// delegation context may already be cancelled when the cleanup defers run.
+// It falls back to deleting the tree if git refuses, so the workspace does
+// not accumulate orphaned worktrees.
+func (t *subagentTool) removeWorktree(path string) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	command := fmt.Sprintf("git worktree remove --force %q", path)
+	input, _ := json.Marshal(map[string]any{"command": command, "cwd": t.base, "timeout_seconds": 60})
+	registry, err := tools.SandboxedRegistry(t.sandbox, t.workspace)
+	if err != nil {
+		_ = os.RemoveAll(path)
+		return
+	}
+	if _, err := registry.Run(ctx, runtime.ToolCall{Name: "run_command", Input: string(input)}); err != nil {
+		_ = os.RemoveAll(path)
+	}
 }
 
 func finalAssistantContent(messages []runtime.Message) string {

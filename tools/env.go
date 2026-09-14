@@ -14,12 +14,24 @@ var secretEnvMarkers = []string{
 	"APIKEY",
 	"AUTH_TOKEN",
 	"ACCESS_TOKEN",
+	"SESSION_TOKEN",
+	// Bare TOKEN covers the common one-off names (GITHUB_TOKEN, NPM_TOKEN,
+	// HF_TOKEN, GITLAB_TOKEN, …) that do not spell out auth/access.
+	"TOKEN",
 	"SECRET",
 	"PASSWORD",
 	"PASSWD",
 	"CREDENTIAL",
 	"PRIVATE_KEY",
-	"SESSION_TOKEN",
+	// AWS access keys have no secret-shaped name apart from the key id.
+	"AWS_ACCESS_KEY_ID",
+	// Connection URLs commonly embed credentials inline.
+	"DATABASE_URL",
+	"POSTGRES_URL",
+	"MYSQL_URL",
+	"MONGODB_URI",
+	"MONGO_URL",
+	"REDIS_URL",
 }
 
 // childEnv returns the environment for tool subprocesses: the parent

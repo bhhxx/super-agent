@@ -290,22 +290,25 @@ func TestTransitionTable(t *testing.T) {
 			runtimeDataChangeTypes: []RuntimeDataChange{FlushStreamingAssistant{}, ClearPendingTool{}, ClearCurrentTool{}, ClearToolCallBatch{}},
 		},
 		{
+			// Cancelling while a call awaits approval must still answer that
+			// call, exactly like the error path: an unanswered tool call makes
+			// the persisted transcript unresumable.
 			name: "CancelRequested/WaitingApproval->Idle", state: StateWaitingApproval,
 			event: CancelRequested{}, wantState: StateIdle,
-			runtimeDataChangeCount: 4, clearExistingActions: true,
-			runtimeDataChangeTypes: []RuntimeDataChange{FlushStreamingAssistant{}, ClearPendingTool{}, ClearCurrentTool{}, ClearToolCallBatch{}},
+			runtimeDataChangeCount: 5, clearExistingActions: true,
+			runtimeDataChangeTypes: []RuntimeDataChange{FlushStreamingAssistant{}, AppendToolResult{}, ClearPendingTool{}, ClearCurrentTool{}, ClearToolCallBatch{}},
 		},
 		{
 			name: "CancelRequested/RunningTool->Idle", state: StateRunningTool,
 			event: CancelRequested{}, wantState: StateIdle,
-			runtimeDataChangeCount: 4, clearExistingActions: true,
-			runtimeDataChangeTypes: []RuntimeDataChange{FlushStreamingAssistant{}, ClearPendingTool{}, ClearCurrentTool{}, ClearToolCallBatch{}},
+			runtimeDataChangeCount: 5, clearExistingActions: true,
+			runtimeDataChangeTypes: []RuntimeDataChange{FlushStreamingAssistant{}, AppendToolResult{}, ClearPendingTool{}, ClearCurrentTool{}, ClearToolCallBatch{}},
 		},
 		{
 			name: "CancelRequested/AdvancingQueue->Idle", state: StateAdvancingQueue,
 			event: CancelRequested{}, wantState: StateIdle,
-			runtimeDataChangeCount: 4, clearExistingActions: true,
-			runtimeDataChangeTypes: []RuntimeDataChange{FlushStreamingAssistant{}, ClearPendingTool{}, ClearCurrentTool{}, ClearToolCallBatch{}},
+			runtimeDataChangeCount: 5, clearExistingActions: true,
+			runtimeDataChangeTypes: []RuntimeDataChange{FlushStreamingAssistant{}, AppendToolResult{}, ClearPendingTool{}, ClearCurrentTool{}, ClearToolCallBatch{}},
 		},
 
 		// --- ResetRequested ---

@@ -80,7 +80,7 @@ func (r *DefaultActionResultResolver) resolveToolCall(call ToolCall, specs []Too
 }
 
 func (r *DefaultActionResultResolver) decision(call ToolCall, specs []ToolSpec) ToolDecision {
-	if r.approvals.AutoApproveTools() || r.approvals.IsAlwaysAllowed(NewApprovalKey(call)) {
+	if r.approvals.IsAlwaysAllowed(NewApprovalKey(call)) {
 		return DecisionRunDirectly
 	}
 	return r.policy.ClassifyToolCall(call, ToolPolicyInput{ToolSpecs: specs})

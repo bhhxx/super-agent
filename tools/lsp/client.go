@@ -39,6 +39,7 @@ type client struct {
 	process     *exec.Cmd
 	stdin       io.WriteCloser
 	mu          sync.Mutex
+	writeMu     sync.Mutex
 	pending     map[int64]chan response
 	diagnostics map[string]json.RawMessage
 	nextID      atomic.Int64
@@ -101,7 +102,9 @@ func start(ctx context.Context, config ServerConfig) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	command.Stderr = os.Stderr
+	// Server stderr is dropped, not forwarded: the TUI owns the terminal, and
+	// a chatty language server (gopls, rust-analyzer) would garble it.
+	command.Stderr = io.Discard
 	if err := command.Start(); err != nil {
 		return nil, err
 	}
@@ -171,6 +174,7 @@ func (c *client) readLoop(reader io.Reader) {
 }
 
 func readHeader(reader *bufio.Reader) (int, error) {
+	const maxMessageBytes = 32 << 20
 	length := 0
 	for {
 		line, err := reader.ReadString('\n')
@@ -190,6 +194,11 @@ func readHeader(reader *bufio.Reader) (int, error) {
 	}
 	if length <= 0 {
 		return 0, errors.New("invalid LSP content length")
+	}
+	// The length is server-controlled; cap it so a buggy or hostile server
+	// cannot make the agent allocate unbounded memory.
+	if length > maxMessageBytes {
+		return 0, fmt.Errorf("LSP message of %d bytes exceeds the %d byte limit", length, maxMessageBytes)
 	}
 	return length, nil
 }
@@ -215,6 +224,11 @@ func (c *client) request(ctx context.Context, method string, params any) (json.R
 	case <-c.done:
 		return nil, firstError(c.err, errors.New("LSP server stopped"))
 	case <-ctx.Done():
+		// Drop the registration; the buffered channel means a late reply
+		// from the read loop cannot block.
+		c.mu.Lock()
+		delete(c.pending, id)
+		c.mu.Unlock()
 		return nil, ctx.Err()
 	}
 }
@@ -223,15 +237,34 @@ func (c *client) notify(method string, params any) error {
 	return c.write(map[string]any{"jsonrpc": "2.0", "method": method, "params": params})
 }
 
+// writeTimeout bounds one wire write. A language server that stops reading
+// its stdin would otherwise block the writer forever while holding the
+// write lock, wedging every future request before its context could fire.
+const writeTimeout = 30 * time.Second
+
 func (c *client) write(message any) error {
 	body, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, err = fmt.Fprintf(c.stdin, "Content-Length: %d\r\n\r\n%s", len(body), body)
-	return err
+	// A dedicated write lock keeps message order on the wire without
+	// sharing the pending-map mutex, so bookkeeping stays responsive.
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	written := make(chan error, 1)
+	go func() {
+		_, err := fmt.Fprintf(c.stdin, "Content-Length: %d\r\n\r\n%s", len(body), body)
+		written <- err
+	}()
+	select {
+	case err := <-written:
+		return err
+	case <-time.After(writeTimeout):
+		// The pipe is wedged; this client is unrecoverable. Poison it so
+		// later requests fail fast instead of piling onto the dead pipe.
+		c.fail(errors.New("LSP server write timed out"))
+		return errors.New("LSP server write timed out")
+	}
 }
 
 func (c *client) fail(err error) { c.mu.Lock(); c.err = err; c.mu.Unlock() }
@@ -306,6 +339,9 @@ func (m *Manager) clientFor(clients []*client, path string) (*client, string, er
 	if err != nil {
 		return nil, "", err
 	}
+	// ResolvePath canonicalizes symlinks, so the containment check below runs
+	// on the real target rather than a lexical path that a workspace symlink
+	// could point outside.
 	if !m.workspace.CanRead(absolute) {
 		return nil, "", errors.New("path is outside readable workspace roots")
 	}

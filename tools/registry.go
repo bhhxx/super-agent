@@ -198,7 +198,19 @@ func (r *Registry) Run(ctx context.Context, call protocol.ToolCall) (result stri
 		if err := observer(ctx, "pre_tool", call, nil); err != nil {
 			return "", err
 		}
-		defer func() { err = errors.Join(err, observer(ctx, "post_tool", call, err)) }()
+		defer func() {
+			hookErr := observer(ctx, "post_tool", call, err)
+			if hookErr == nil {
+				return
+			}
+			// A post-hook failure must not turn the tool run into an error:
+			// the work already happened, and an error result would make the
+			// engine report the call as failed. Surface it in the output;
+			// when the tool itself failed, its own error dominates.
+			if err == nil {
+				result += "\n[post_tool hook failed: " + hookErr.Error() + "]"
+			}
+		}()
 	}
 	return r.RunDirect(ctx, call)
 }

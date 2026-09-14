@@ -181,12 +181,6 @@ func (s *blockingApprovalStore) IsAlwaysAllowed(key ApprovalKey) bool {
 	return s.allowed[key]
 }
 
-func (s *blockingApprovalStore) SetAutoApproveTools(bool) {}
-
-func (s *blockingApprovalStore) AutoApproveTools() bool {
-	return false
-}
-
 type streamingCancelModel struct {
 	started chan struct{}
 }
@@ -429,29 +423,6 @@ func TestCustomPolicyClassifiesToolCallWithInput(t *testing.T) {
 	if len(policy.specs) != 1 || len(policy.specs[0]) != 1 || policy.specs[0][0].Name != "bash" || !policy.specs[0][0].Risky {
 		t.Fatalf("policy specs = %+v, want risky bash spec", policy.specs)
 	}
-	if len(tools.calls) != 1 {
-		t.Fatalf("tool calls = %+v, want one", tools.calls)
-	}
-}
-
-func TestAutoApproveBypassesCustomPolicyDecision(t *testing.T) {
-	model := &scriptedModel{responses: []ModelResponse{
-		{ToolCalls: []ToolCall{{Name: "bash", Input: "printf ok"}}},
-		{Content: "done"},
-	}}
-	tools := &fakeTool{
-		results: map[string]string{"bash": "ok"},
-		specs:   []ToolSpec{{Name: "bash", Risky: true}},
-	}
-	policy := &recordingPolicy{decision: DecisionNeedsApproval}
-	engine := NewEngineWithExecutorAndPolicy(NewDefaultScheduledActionExecutor(model, tools), policy, nil)
-	engine.EnableAutoApproveTools()
-	if err := engine.Ready(); err != nil {
-		t.Fatal(err)
-	}
-
-	runSession(t, engine, "use bash")
-
 	if len(tools.calls) != 1 {
 		t.Fatalf("tool calls = %+v, want one", tools.calls)
 	}
@@ -1229,8 +1200,8 @@ func TestSessionRunReturnsErrorWhenApprovalChannelCloses(t *testing.T) {
 	waitForApproval(t, events, approvals, nil)
 	close(approvals)
 	err := <-done
-	if err == nil || err.Error() != "approval channel closed" {
-		t.Fatalf("Run error = %v, want approval channel closed", err)
+	if err == nil || !errors.Is(err, ErrApprovalDismissed) {
+		t.Fatalf("Run error = %v, want ErrApprovalDismissed", err)
 	}
 	if engine.State() != StateIdle {
 		t.Fatalf("state = %s, want %s", engine.State(), StateIdle)

@@ -10,8 +10,6 @@ import (
 	"super-agent/runtime/protocol"
 )
 
-func (e *Engine) EnableAutoApproveTools() { e.approvals.SetAutoApproveTools(true) }
-
 func (e *Engine) Ready() error {
 	return e.DispatchEvent(context.Background(), machine.EngineReady{}, nil)
 }
