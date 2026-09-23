@@ -13,7 +13,17 @@ import (
 	"super-agent/tui/transcript"
 )
 
+// Update routes one message and then commits whatever that message pushed out
+// of the live window. Every path returns through here, so no branch can leave
+// the window overfull.
 func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	next, command := a.route(message)
+	next.commitOverflow()
+	return next, tea.Batch(next.flushScrollback(), command)
+}
+
+// route applies a message to the model it concerns.
+func (a App) route(message tea.Msg) (App, tea.Cmd) {
 	switch message := message.(type) {
 	case tea.WindowSizeMsg:
 		return a.resize(message)
@@ -55,7 +65,7 @@ func (a App) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	}
 }
 
-func (a App) resize(message tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+func (a App) resize(message tea.WindowSizeMsg) (App, tea.Cmd) {
 	a.width, a.height = max(1, message.Width), max(1, message.Height)
 	a.ready = true
 	a.composer.SetWidth(a.width)
@@ -64,7 +74,7 @@ func (a App) resize(message tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a App) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (a App) updateKey(message tea.KeyMsg) (App, tea.Cmd) {
 	if a.showHelp {
 		if message.String() == "?" || message.String() == "esc" {
 			a.showHelp = false
@@ -141,7 +151,7 @@ func (a App) updateKey(message tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return a, command
 }
 
-func (a App) updateConversationNotification(notification ConversationNotification) (tea.Model, tea.Cmd) {
+func (a App) updateConversationNotification(notification ConversationNotification) (App, tea.Cmd) {
 	switch notification := notification.(type) {
 	case AgentStatusChanged:
 		a.agentStatus = notification.Status
@@ -170,7 +180,7 @@ func (a App) updateConversationNotification(notification ConversationNotificatio
 
 // submitText routes submitted input to the feature that owns its meaning: the
 // command feature for slash commands, the turn lifecycle for everything else.
-func (a App) submitText(text string) (tea.Model, tea.Cmd) {
+func (a App) submitText(text string) (App, tea.Cmd) {
 	if a.commands.Compacting() || a.commands.ManagingMCP() {
 		a.status = "Background operation in progress…"
 		return a, nil
@@ -184,7 +194,7 @@ func (a App) submitText(text string) (tea.Model, tea.Cmd) {
 	return a.applyOutcome(outcome, command)
 }
 
-func (a App) queueInput(text string) (tea.Model, tea.Cmd) {
+func (a App) queueInput(text string) (App, tea.Cmd) {
 	if a.commands.Compacting() {
 		a.status = "Compacting conversation…"
 		return a, nil
@@ -199,7 +209,7 @@ func (a App) queueInput(text string) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a App) steerInput(text string) (tea.Model, tea.Cmd) {
+func (a App) steerInput(text string) (App, tea.Cmd) {
 	if commands.IsCommand(text) {
 		a.err = "Slash commands are unavailable while a turn is running"
 		return a, nil
@@ -222,7 +232,7 @@ func pendingAttachments(items []attachments.Item) []commands.Attachment {
 	return result
 }
 
-func (a App) finishSubmit(err error) (tea.Model, tea.Cmd) {
+func (a App) finishSubmit(err error) (App, tea.Cmd) {
 	a.cancel = nil
 	a.composer.SetTurnRunning(false)
 	if err != nil && !errors.Is(err, context.Canceled) {
@@ -234,7 +244,7 @@ func (a App) finishSubmit(err error) (tea.Model, tea.Cmd) {
 	return a, nil
 }
 
-func (a App) submitPrompt(text string) (tea.Model, tea.Cmd) {
+func (a App) submitPrompt(text string) (App, tea.Cmd) {
 	a.err = ""
 	a.status = ""
 	a.transcript.ClearStreaming()

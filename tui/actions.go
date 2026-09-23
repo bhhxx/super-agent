@@ -40,7 +40,7 @@ func (a App) copyCommand(text string) tea.Cmd {
 }
 
 // finishCopy reports the outcome of an asynchronous clipboard write.
-func (a App) finishCopy(message clipboardDoneMsg) (tea.Model, tea.Cmd) {
+func (a App) finishCopy(message clipboardDoneMsg) (App, tea.Cmd) {
 	if message.err != nil {
 		a.err = "Failed to copy: " + message.err.Error()
 		a.status = ""

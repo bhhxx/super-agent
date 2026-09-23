@@ -50,6 +50,7 @@ type App struct {
 	turn            int
 	writeClipboard  func(string) error
 	printOutput     func(string) tea.Cmd
+	scrollback      []string
 }
 
 type Option func(*App)
@@ -187,7 +188,7 @@ func (a *App) refreshSnapshot() {
 // applyOutcome carries out a command feature's requests. It only routes and
 // applies: the feature owns the semantics, the root owns the effects and the
 // wiring to the features a command reaches across.
-func (a App) applyOutcome(outcome *commands.Outcome, command tea.Cmd) (tea.Model, tea.Cmd) {
+func (a App) applyOutcome(outcome *commands.Outcome, command tea.Cmd) (App, tea.Cmd) {
 	if outcome == nil {
 		return a, command
 	}
@@ -221,20 +222,63 @@ func (a App) applyOutcome(outcome *commands.Outcome, command tea.Cmd) (tea.Model
 		return a.submitPrompt(outcome.Prompt)
 	}
 	if outcome.Output != "" {
-		return a, a.printCommand(outcome.Output)
+		a.queueScrollback(outcome.Output)
 	}
 	return a, command
 }
 
-func (a App) printCommand(content string) tea.Cmd {
+// queueScrollback adds content to this update's terminal output. Everything an
+// update queues leaves as a single write, so a command's divider always lands
+// above the transcript overflow it separates.
+func (a *App) queueScrollback(content string) {
 	if strings.TrimSpace(content) == "" {
+		return
+	}
+	a.scrollback = append(a.scrollback, strings.TrimRight(content, "\n"))
+}
+
+// flushScrollback returns the command that writes this update's queued output.
+// It returns nil when the update queued nothing, which is the common case.
+func (a *App) flushScrollback() tea.Cmd {
+	if len(a.scrollback) == 0 {
 		return nil
 	}
+	content := strings.Join(a.scrollback, "\n")
+	a.scrollback = nil
 	print := a.printOutput
 	if print == nil {
 		print = func(content string) tea.Cmd { return tea.Println(content) }
 	}
-	return print(strings.TrimRight(content, "\n"))
+	return print(content)
+}
+
+// commitOverflow hands the transcript blocks that no longer fit the live window
+// to terminal scrollback. The live window is sized from the footer that is on
+// screen right now, so a menu or a growing composer commits what it pushes out
+// in the same update.
+func (a *App) commitOverflow() {
+	if !a.ready {
+		return
+	}
+	evicted := a.transcript.Commit(a.transcriptRows())
+	if evicted == "" {
+		return
+	}
+	a.queueScrollback(clampLines(a.width, evicted))
+}
+
+// transcriptRows reports the rows left for the live window once the footer and
+// the blank line above it are accounted for.
+func (a App) transcriptRows() int {
+	return a.height - lineCount(a.footerView()) - 1
+}
+
+// lineCount reports how many terminal rows a rendered block occupies.
+func lineCount(block string) int {
+	if block == "" {
+		return 0
+	}
+	return strings.Count(block, "\n") + 1
 }
 
 func displayCWD(cwd string) string {

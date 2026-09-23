@@ -469,6 +469,33 @@ func typeText(model tea.Model, text string) tea.Model {
 	return model
 }
 
+// submitAndDrain submits text and delivers every notification the turn
+// produces, so the transcript reaches the state a finished turn leaves it in.
+func submitAndDrain(t *testing.T, model tea.Model, text string) tea.Model {
+	t.Helper()
+	model = typeText(model, text)
+	model, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("cmd is nil")
+	}
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("msg = %T, want tea.BatchMsg", msg)
+	}
+	if done := batch[len(batch)-1](); done == nil {
+		t.Fatal("done message is nil")
+	}
+	for eventCmd := batch[0]; eventCmd != nil; {
+		eventMsg := eventCmd()
+		if eventMsg == nil {
+			break
+		}
+		model, eventCmd = model.Update(eventMsg)
+	}
+	return model
+}
+
 func assertLinesFitWidth(t *testing.T, view string, width int) {
 	t.Helper()
 	for i, line := range strings.Split(view, "\n") {
@@ -700,6 +727,80 @@ func TestTUIRendersSessionNotificationsWithoutSnapshotReads(t *testing.T) {
 
 	if view := model.View(); !strings.Contains(view, "from notification") {
 		t.Fatalf("view = %q, want assistant in managed transcript", view)
+	}
+}
+
+func TestContentThatLeavesTheWindowIsCommittedToTerminalScrollback(t *testing.T) {
+	session := &notificationOnlyConversation{extraMessages: 20}
+	printed := &recordedOutput{}
+	var model tea.Model = tui.New(session, tui.StartupInfo{ModelName: "test-model"}, printed.option())
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	model = submitAndDrain(t, model, "hi")
+
+	scrollback := strings.Join(printed.items, "\n")
+	if !strings.Contains(scrollback, "❯ hi") || !strings.Contains(scrollback, "from notification") {
+		t.Fatalf("scrollback = %q, want the messages the window pushed out", scrollback)
+	}
+	view := model.View()
+	if strings.Contains(view, "from notification") {
+		t.Fatalf("view = %q, committed messages must leave the live window", view)
+	}
+	if !strings.Contains(view, "message message") {
+		t.Fatalf("view = %q, want the newest messages still live", view)
+	}
+}
+
+// The commit is what makes the terminal scroll: a frame shorter than the
+// terminal absorbs the print and the committed text never reaches scrollback.
+func TestLiveViewFillsTheTerminalSoCommitsScroll(t *testing.T) {
+	session := &notificationOnlyConversation{extraMessages: 4}
+	printed := &recordedOutput{}
+	var model tea.Model = tui.New(session, tui.StartupInfo{ModelName: "test-model"}, printed.option())
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	model = submitAndDrain(t, model, "hi")
+
+	if rows := len(strings.Split(model.View(), "\n")); rows != 24 {
+		t.Fatalf("view rows = %d, want the whole 24-row terminal", rows)
+	}
+}
+
+func TestCommittedContentIsNeverCommittedTwice(t *testing.T) {
+	session := &notificationOnlyConversation{extraMessages: 20}
+	printed := &recordedOutput{}
+	var model tea.Model = tui.New(session, tui.StartupInfo{ModelName: "test-model"}, printed.option())
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	model = submitAndDrain(t, model, "hi")
+	committed := strings.Join(printed.items, "\n")
+
+	for _, message := range []tea.Msg{
+		tea.KeyMsg{Type: tea.KeyPgUp},
+		tea.KeyMsg{Type: tea.KeyCtrlO},
+		tea.KeyMsg{Type: tea.KeyCtrlT},
+		tea.WindowSizeMsg{Width: 80, Height: 24},
+	} {
+		model, _ = model.Update(message)
+	}
+	if got := strings.Join(printed.items, "\n"); got != committed {
+		t.Fatalf("scrollback changed to %q, want %q", got, committed)
+	}
+}
+
+func TestOverflowCommitsWithinTheTerminalWidth(t *testing.T) {
+	session := &notificationOnlyConversation{extraMessages: 20}
+	printed := &recordedOutput{}
+	var model tea.Model = tui.New(session, tui.StartupInfo{ModelName: "test-model"}, printed.option())
+	model, _ = model.Update(tea.WindowSizeMsg{Width: 40, Height: 24})
+
+	model = submitAndDrain(t, model, "hi")
+
+	if len(printed.items) == 0 {
+		t.Fatal("nothing was committed")
+	}
+	for _, item := range printed.items {
+		assertLinesFitWidth(t, item, 40)
 	}
 }
 

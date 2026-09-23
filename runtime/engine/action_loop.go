@@ -28,7 +28,8 @@ func (e *Engine) RunTurn(ctx context.Context, event machine.UserMessageSubmitted
 	telemetry.Record("run", telemetry.Fields{"run_id": string(runID), "duration_ms": time.Since(started).Milliseconds(), "error": errorString(err)})
 	return err
 }
-
+// idle -> waitingllm -> idle
+// idle
 func (e *Engine) dispatchEvent(ctx context.Context, event machine.Event, onStreamChunk func(protocol.StreamChunk), approvalWaiter execution.ApprovalWaiter) (execution.RunID, error) {
 	e.mu.Lock()
 	decision, err := e.calculateTransitionLocked(event)

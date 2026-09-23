@@ -45,7 +45,7 @@ to unrelated features.
 | Feature | Owns |
 |---|---|
 | `tui/composer` | The prompt input, its history, queued follow-ups, and the slash-command palette. Emits `Submit`, `Queue`, `Steer`, and `Clear` intents. |
-| `tui/transcript` | Committed messages, live streaming content, tool-call and reasoning expansion, and copying the latest code block. |
+| `tui/transcript` | Committed messages, the live window and what leaves it, live streaming content, tool-call and reasoning expansion, and copying the latest code block. |
 | `tui/approval` | The pending tool-approval request, its selection, and the decision the runtime receives. |
 | `tui/attachments` | Files queued for the next turn. |
 | `tui/commands` | The slash-command catalogue, each command's input semantics, and the compact and MCP operations they start. |
@@ -139,21 +139,28 @@ Run rules:
 
 ## Layout
 
-The TUI uses the terminal's main screen. `View` owns the welcome block, conversation, live streaming
-content, approval and command menus, composer, and status line. This single managed transcript lets
-tool details expand in place without duplicating conversation history.
+The TUI uses the terminal's main screen, and the conversation lives in two places. The newest messages
+stay in a live window inside `View`, alongside live streaming content, approval and command menus, the
+composer, and the status line. Everything older is committed to terminal scrollback. Committed text is
+the terminal's, not the program's: it is never repainted.
 
+- A message leaves the live window when the window no longer fits the rows left above the composer.
+  Leaving is a commit, not a discard: it is written to terminal scrollback in the same update and can
+  be read back with the terminal's own scrolling. The rows the window gives up stay blank until newer
+  messages fill them.
+- Committed text is fixed. Tool calls are printed as compact action summaries, and expanding or
+  collapsing rebuilds only what is still in the window, so inputs and affected paths stay directly
+  below their owning tool-call summary for as long as that summary is live.
+- The live window is clamped to the terminal width and height. The newest message stays in the window
+  even when it is taller, so a long reply shows its tail until something displaces it.
+- Reset, resume, compact, and undo rebuild the live window from current conversation state without
+  re-printing anything, because scrollback only grows. The command prints a divider describing the new
+  state, and the divider marks where the current conversation starts.
 - The compact welcome block contains the product name, model, working directory, and final loaded
   instruction-source filename.
 - User prompts are visually prominent. Assistant prose uses the available width without an extra
   left indent.
-- Reasoning defaults to a compact `Thinking...` line. The reasoning text expands in place for the
-  latest or all model steps with the keys above.
-- Tool calls are printed as compact action summaries. Expanding or collapsing rebuilds the visible
-  transcript so inputs and affected paths stay directly below their owning tool-call summary.
-- The dynamic area is clamped to the terminal width and height and shows its tail when content exceeds
-  the available rows.
-- Reset, resume, compact, and undo rebuild the managed transcript from current conversation state.
+- Reasoning defaults to a compact `Thinking...` line.
 - Below 18 terminal rows, queue details and command choices use their compact forms.
 - The bottom status line contains permission mode, model, and whether tools are enabled.
 

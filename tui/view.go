@@ -41,21 +41,39 @@ func (a App) View() string {
 		return "\n  Initializing..."
 	}
 	if a.showHelp {
-		return fitDynamicArea(a.width, a.height, a.helpView())
+		return fillDynamicArea(a.width, a.height, a.helpView(), "")
 	}
-	parts := make([]string, 0, 3)
-	if content := a.transcript.View(); content != "" {
-		parts = append(parts, content)
-	}
-	parts = append(parts, a.footerView())
-	return fitDynamicArea(a.width, a.height, strings.Join(parts, "\n\n"))
+	return fillDynamicArea(a.width, a.height, a.transcript.View(), a.footerView())
 }
 
-func fitDynamicArea(width, height int, content string) string {
-	content = clampLines(width, content)
-	lines := strings.Split(content, "\n")
-	if height > 0 && len(lines) > height {
+// fillDynamicArea composes the live window and the footer into exactly height
+// rows. The footer sits on the last row and blank rows fill the space the
+// window does not use; without a footer the content starts at the top. Content
+// taller than the area keeps its tail, which the transcript's own sizing leaves
+// only to a block taller than the terminal.
+//
+// The frame fills the terminal on purpose. bubbletea's inline renderer scrolls
+// by exactly the lines a commit prints only while the frame it repaints is that
+// tall; a shorter frame absorbs the print, and the committed text never reaches
+// scrollback.
+func fillDynamicArea(width, height int, window, footer string) string {
+	lines := make([]string, 0, max(0, height))
+	if window = clampLines(width, window); window != "" {
+		lines = append(lines, strings.Split(window, "\n")...)
+		lines = append(lines, "")
+	}
+	if footer = clampLines(width, footer); footer != "" {
+		lines = append(lines, strings.Split(footer, "\n")...)
+	}
+	if height <= 0 {
+		return strings.Join(lines, "\n")
+	}
+	if len(lines) > height {
 		lines = lines[len(lines)-height:]
 	}
-	return strings.Join(lines, "\n")
+	blank := make([]string, height-len(lines))
+	if footer == "" {
+		return strings.Join(append(lines, blank...), "\n")
+	}
+	return strings.Join(append(blank, lines...), "\n")
 }

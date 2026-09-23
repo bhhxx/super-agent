@@ -3,6 +3,7 @@ package transcript
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -55,6 +56,8 @@ type Model struct {
 	expandAllTools    bool
 	expandLatestThink bool
 	expandAllThink    bool
+	windowStart       int
+	welcomeCommitted  bool
 }
 
 func New(welcome string, styles Styles) Model {
@@ -63,7 +66,45 @@ func New(welcome string, styles Styles) Model {
 
 func (m *Model) SetWidth(width int) { m.width = max(1, width) }
 
-func (m *Model) Replace(messages []Message) { m.messages = append([]Message(nil), messages...) }
+// Replace rebuilds the transcript from current conversation state. The rebuilt
+// list keeps the standing of the messages it still starts with: scrollback only
+// grows, so what the window already moved there does not come back, and what it
+// still holds is not committed a second time.
+func (m *Model) Replace(messages []Message) {
+	m.windowStart = min(m.windowStart, commonPrefix(m.messages, messages))
+	m.messages = append([]Message(nil), messages...)
+}
+
+// commonPrefix reports how many leading messages two transcripts share.
+func commonPrefix(current, rebuilt []Message) int {
+	shared := 0
+	for shared < len(current) && shared < len(rebuilt) && sameMessage(current[shared], rebuilt[shared]) {
+		shared++
+	}
+	return shared
+}
+
+func sameMessage(left, right Message) bool {
+	if left.Role != right.Role || left.Content != right.Content ||
+		left.ReasoningContent != right.ReasoningContent || left.ToolCallID != right.ToolCallID ||
+		left.ToolName != right.ToolName || left.Interrupted != right.Interrupted ||
+		len(left.ToolCalls) != len(right.ToolCalls) || !slices.Equal(left.Attachments, right.Attachments) {
+		return false
+	}
+	for index, call := range left.ToolCalls {
+		other := right.ToolCalls[index]
+		if call == nil || other == nil {
+			if call != other {
+				return false
+			}
+			continue
+		}
+		if *call != *other {
+			return false
+		}
+	}
+	return true
+}
 
 func (m *Model) Append(message Message) { m.messages = append(m.messages, message) }
 
@@ -105,11 +146,86 @@ func (m Model) Update(message tea.KeyMsg) (Model, *Intent, bool) {
 }
 
 func (m Model) View() string {
-	parts := []string{m.transcriptView()}
+	parts := make([]string, 0, 2)
+	if window := m.windowView(); window != "" {
+		parts = append(parts, window)
+	}
 	if stream := m.streamingView(); stream != "" {
 		parts = append(parts, stream)
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// Commit fits the live window into rows and returns the text of the blocks it
+// pushed out, oldest first, ready for terminal scrollback. It returns "" while
+// everything still fits.
+//
+// rows is the feature's whole budget: the live window, the blank line View
+// joins to the streaming block, and the streaming block itself. Streaming is
+// never committed — its committed copy arrives as a message and enters the
+// window like any other — and neither is the newest message, so a reply longer
+// than the window is read where it lands and committed once something newer
+// displaces it.
+func (m *Model) Commit(rows int) string {
+	if rows < 1 {
+		return ""
+	}
+	blocks := m.windowBlocks()
+	if len(blocks) == 0 {
+		return ""
+	}
+	sums := make([]int, len(blocks)+1)
+	for index, block := range blocks {
+		sums[index+1] = sums[index] + blockLines(block.text)
+	}
+	streaming := blockLines(m.streamingView())
+	budget := rows - streaming
+	if budget > 0 && streaming > 0 {
+		budget-- // the blank line View joins the window and the stream with
+	}
+	evictable := len(blocks)
+	if last := blocks[len(blocks)-1]; last.index >= 0 && last.index == len(m.messages)-1 {
+		evictable--
+	}
+	cut := 0
+	for cut < evictable {
+		remaining := sums[len(blocks)] - sums[cut]
+		if left := len(blocks) - cut; left > 1 {
+			remaining += left - 1
+		}
+		if remaining <= budget {
+			break
+		}
+		cut++
+	}
+	if cut == 0 {
+		return ""
+	}
+	committed := make([]string, 0, cut)
+	for _, block := range blocks[:cut] {
+		if block.index < 0 {
+			m.welcomeCommitted = true
+		} else {
+			m.windowStart = block.index + 1
+		}
+		committed = append(committed, block.text)
+	}
+	return strings.Join(committed, "\n")
+}
+
+// blockLines reports how many terminal rows a rendered block occupies.
+func blockLines(text string) int {
+	if text == "" {
+		return 0
+	}
+	return strings.Count(text, "\n") + 1
+}
+
+// windowBlock is one rendered block of the live window: the welcome, or the
+// message at index.
+type windowBlock struct {
+	index int
+	text  string
 }
 
 func ExtractCodeBlocks(content string) []string {
@@ -283,7 +399,38 @@ func (m Model) renderCommitted(message Message, toolsExpanded, thinkingExpanded 
 	return thinking + "\n" + content
 }
 
-func (m Model) transcriptView() string {
+// windowView renders the live window: the welcome block, then the messages the
+// fit has not pushed out.
+func (m Model) windowView() string {
+	blocks := m.windowBlocks()
+	rendered := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		rendered = append(rendered, block.text)
+	}
+	return strings.Join(rendered, "\n")
+}
+
+// windowBlocks renders the live window in display order. Messages that render
+// to nothing, such as tool results, contribute no block.
+func (m Model) windowBlocks() []windowBlock {
+	latestTool, latestThinking := m.expansionTargets()
+	blocks := make([]windowBlock, 0, max(1, len(m.messages)-m.windowStart+1))
+	if !m.welcomeCommitted && strings.TrimSpace(m.welcome) != "" {
+		blocks = append(blocks, windowBlock{index: -1, text: m.welcome})
+	}
+	for index := m.windowStart; index < len(m.messages); index++ {
+		message := m.messages[index]
+		toolsExpanded := m.expandAllTools || m.expandLatestTools && index == latestTool
+		thinkingExpanded := m.expandAllThink || m.expandLatestThink && index == latestThinking
+		if content := m.renderCommitted(message, toolsExpanded, thinkingExpanded); strings.TrimSpace(content) != "" {
+			blocks = append(blocks, windowBlock{index: index, text: content})
+		}
+	}
+	return blocks
+}
+
+// expansionTargets reports which messages the expansion keys reach.
+func (m Model) expansionTargets() (int, int) {
 	latestTool, latestThinking := -1, -1
 	for index, message := range m.messages {
 		if len(message.ToolCalls) > 0 {
@@ -293,15 +440,7 @@ func (m Model) transcriptView() string {
 			latestThinking = index
 		}
 	}
-	blocks := []string{m.welcome}
-	for index, message := range m.messages {
-		toolsExpanded := m.expandAllTools || m.expandLatestTools && index == latestTool
-		thinkingExpanded := m.expandAllThink || m.expandLatestThink && index == latestThinking
-		if content := m.renderCommitted(message, toolsExpanded, thinkingExpanded); strings.TrimSpace(content) != "" {
-			blocks = append(blocks, content)
-		}
-	}
-	return strings.Join(blocks, "\n")
+	return latestTool, latestThinking
 }
 
 func (m Model) streamingView() string {
